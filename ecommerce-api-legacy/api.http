@@ -1,0 +1,34 @@
+@baseUrl = http://localhost:3000
+@adminToken = dev-admin-token-change-me
+
+### Checkout - sucesso
+POST {{baseUrl}}/api/checkout
+Content-Type: application/json
+
+{
+  "usr": "Guilherme",
+  "eml": "gui@fullcycle.com.br",
+  "pwd": "senhaforte",
+  "c_id": 2,
+  "card": "4111222233334444"
+}
+
+### Checkout - pagamento recusado
+POST {{baseUrl}}/api/checkout
+Content-Type: application/json
+
+{
+  "usr": "João",
+  "eml": "joao@teste.com",
+  "pwd": "123",
+  "c_id": 1,
+  "card": "5111222233334444"
+}
+
+### Relatório financeiro administrativo (protegido por token)
+GET {{baseUrl}}/api/admin/financial-report
+X-Admin-Token: {{adminToken}}
+
+### Deletar usuário (protegido por token)
+DELETE {{baseUrl}}/api/users/1
+X-Admin-Token: {{adminToken}}

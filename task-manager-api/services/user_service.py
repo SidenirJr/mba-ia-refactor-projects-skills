@@ -1,20 +1,15 @@
 """Regras de negócio de usuários, autenticação (token assinado) e dependências."""
-from itsdangerous import URLSafeTimedSerializer
-
 from sqlalchemy import func
 
-from config.settings import settings
 from database import db
 from errors import ConflictError, ForbiddenError, NotFoundError, UnauthorizedError, ValidationError
+from middlewares.auth import _serializer
 from models.task import Task
 from models.user import User
 from utils.helpers import MIN_PASSWORD_LENGTH, VALID_ROLES, is_valid_email
 
 
 class UserService:
-    def _serializer(self):
-        return URLSafeTimedSerializer(settings.SECRET_KEY, salt='auth-token')
-
     def list_all(self):
         counts = dict(
             db.session.execute(
@@ -111,7 +106,7 @@ class UserService:
             raise UnauthorizedError('Credenciais inválidas')
         if not user.active:
             raise ForbiddenError('Usuário inativo')
-        token = self._serializer().dumps({'user_id': user.id})
+        token = _serializer().dumps({'user_id': user.id})
         return {'message': 'Login realizado com sucesso', 'user': user.to_dict(), 'token': token}
 
     # ----- helpers internos -----

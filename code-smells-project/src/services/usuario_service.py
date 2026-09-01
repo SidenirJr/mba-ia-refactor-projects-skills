@@ -29,7 +29,7 @@ class UsuarioService:
             raise ValidationError("Nome, email e senha são obrigatórios")
         if not EMAIL_RE.match(email):
             raise ValidationError("Email inválido")
-        senha_hash = generate_password_hash(senha)
+        senha_hash = generate_password_hash(senha, method="pbkdf2:sha256")
         return self.repo.create(nome, email, senha_hash)
 
     def login(self, email, senha):

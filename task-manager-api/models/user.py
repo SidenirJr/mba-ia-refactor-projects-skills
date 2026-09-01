@@ -27,7 +27,7 @@ class User(db.Model):
         }
 
     def set_password(self, pwd):
-        self.password = generate_password_hash(pwd)
+        self.password = generate_password_hash(pwd, method="pbkdf2:sha256")
 
     def check_password(self, pwd):
         return check_password_hash(self.password, pwd)

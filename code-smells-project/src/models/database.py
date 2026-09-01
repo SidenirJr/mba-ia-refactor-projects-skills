@@ -108,9 +108,9 @@ def _seed(conn):
         produtos,
     )
     usuarios = [
-        ("Admin", "admin@loja.com", generate_password_hash("admin123"), "admin"),
-        ("João Silva", "joao@email.com", generate_password_hash("123456"), "cliente"),
-        ("Maria Santos", "maria@email.com", generate_password_hash("senha123"), "cliente"),
+        ("Admin", "admin@loja.com", generate_password_hash("admin123", method="pbkdf2:sha256"), "admin"),
+        ("João Silva", "joao@email.com", generate_password_hash("123456", method="pbkdf2:sha256"), "cliente"),
+        ("Maria Santos", "maria@email.com", generate_password_hash("senha123", method="pbkdf2:sha256"), "cliente"),
     ]
     conn.executemany(
         "INSERT INTO usuarios (nome, email, senha, tipo) VALUES (?, ?, ?, ?)",

@@ -116,12 +116,23 @@ Objetivo: reestruturar para MVC, eliminar os problemas e **provar que ainda func
    - Lógica de negócio vai para services; controllers ficam finos; rotas só roteiam.
    - Tratamento de erros centralizado.
    - Dados sensíveis (senha, segredo, cartão) **nunca** em respostas ou logs; senhas hasheadas.
-   - Endpoints perigosos não são removidos por padrão — protegidos por um guard de auth.
+   - Endpoints perigosos não são removidos por padrão — protegidos por um guard de auth:
+     `admin_required` (Playbook P12) para ações administrativas/destrutivas, e
+     `login_required` (Playbook P13) para **qualquer** rota que opera sobre dados do usuário
+     autenticado (perfil, tasks, categorias, relatórios pessoais, etc.).
+   - **Sempre que a Fase 2 apontar autenticação ausente ou token forjável/não validado**
+     (finding tipo C7/H5 do catálogo), a Fase 3 não pode se limitar a assinar/gerar o token —
+     é obrigatório aplicar `login_required` a **todas** as rotas do(s) blueprint(s) afetado(s)
+     que exigem usuário logado, deixando públicas só login e cadastro. Emitir um token
+     assinado sem nenhuma rota validá-lo **não fecha** o finding.
 4. **Valide** o resultado:
    - A aplicação **inicia sem erros** (suba o processo).
    - **Todos os endpoints do inventário da Fase 1 respondem** (smoke test: requisições reais
      aos principais, conferindo status e formato).
    - Nenhum segredo/senha hardcoded ou vazado nas respostas.
+   - Se algum finding de auth ausente foi corrigido, **teste também o caminho negativo**:
+     requisição sem token (ou com token inválido) às rotas protegidas retorna 401, e o mesmo
+     smoke test com um token válido do login continua respondendo 2xx.
    - Se algo quebrar, **corrija antes de finalizar**.
 5. Imprima o resumo final:
 

@@ -4,7 +4,7 @@ Padrões de transformação **antes/depois** para os anti-patterns do catálogo.
 mapeia para um ou mais findings. Aplique por ordem de severidade. Os exemplos cobrem
 Python/Flask e Node/Express para reforçar o agnosticismo.
 
-> ≥8 padrões exigidos; abaixo há 12 (P1–P12).
+> ≥8 padrões exigidos; abaixo há 13 (P1–P13).
 
 ---
 
@@ -108,7 +108,8 @@ self.password = hashlib.md5(pwd.encode()).hexdigest()          # quebrado, sem s
 **Depois (Python)**
 ```python
 from werkzeug.security import generate_password_hash, check_password_hash
-def set_password(self, pwd):   self.password = generate_password_hash(pwd)
+def set_password(self, pwd):
+    self.password = generate_password_hash(pwd, method="pbkdf2:sha256")  # não "scrypt" (padrão)
 def check_password(self, pwd): return check_password_hash(self.password, pwd)
 ```
 **Node**
@@ -118,6 +119,12 @@ const hash = await bcrypt.hash(pwd, 12);
 const ok = await bcrypt.compare(pwd, user.pass);
 ```
 Re-gere os hashes do seed. O login continua funcionando com as mesmas credenciais.
+
+> **Portabilidade:** fixe `method="pbkdf2:sha256"` explicitamente. O padrão do `werkzeug` (`scrypt`)
+> depende de `hashlib.scrypt`, que exige Python compilado contra OpenSSL com suporte a scrypt —
+> ausente no Python do sistema em algumas instalações macOS (LibreSSL), onde falha com
+> `AttributeError: module 'hashlib' has no attribute 'scrypt'` já no boot/seed. `pbkdf2:sha256`
+> não tem essa dependência e é aceito por `check_password_hash` da mesma forma.
 
 ---
 
@@ -290,9 +297,12 @@ Use o `logging` do Python / um logger (pino/winston) no Node, com níveis.
 
 ---
 
-## P12 — Proteger endpoint perigoso com guard de auth (mantendo-o vivo)
+## P12 — Proteger endpoint administrativo com admin guard (mantendo-o vivo)
 
-Resolve: C7 (broken access control), H5 (fake token).
+Resolve: C7 (broken access control) quando o recurso é **administrativo/destrutivo**
+(reset de DB, SQL arbitrário, relatórios financeiros amplos, delete em massa) — ação que só
+faz sentido para um papel privilegiado, não para qualquer usuário logado. Se o problema é
+"nenhum endpoint exige sessão" de forma geral, use **P13**, não este.
 
 **Antes**
 ```python
@@ -316,5 +326,72 @@ def admin_required(f):
 def executar_query(): ...
 ```
 Aplique o mesmo guard a reset de DB, relatórios financeiros e delete destrutivo. Para tokens
-de sessão forjáveis (`'fake-jwt-token-'+id`), prefira um token assinado/expirável; no mínimo,
-documente o risco e isole a geração do token num service.
+de sessão forjáveis (`'fake-jwt-token-'+id`), prefira um token assinado/expirável (ver P13);
+no mínimo, documente o risco e isole a geração do token num service.
+
+---
+
+## P13 — Exigir login em endpoints de usuário autenticado (login guard)
+
+Resolve: C7 (broken access control) e H5 (fake/forgeable token) quando o finding é mais
+amplo que um endpoint admin isolado: **nenhuma rota de recurso do usuário logado** (tasks,
+categorias, o próprio perfil, relatórios pessoais, etc.) exige sessão válida — qualquer um
+pode ler/alterar/apagar dados de qualquer usuário só sabendo o id. Este é o guard **padrão**
+a aplicar sempre que a Fase 2 apontar "autenticação ausente"/"token forjável" fora do
+contexto administrativo — P12 é a exceção para rotas de admin, não o padrão geral.
+
+**Antes**
+```python
+# login gera um token, mas nenhuma rota o valida
+@user_bp.route("/users/<int:user_id>", methods=["DELETE"])
+def delete_user(user_id):
+    ...   # qualquer requisição sem token apaga qualquer usuário
+```
+**Depois (token assinado + guard aplicado a toda rota que exige usuário logado)**
+```python
+# services/user_service.py — geração do token no login (assinado, expirável)
+from itsdangerous import URLSafeTimedSerializer
+
+def _serializer():
+    return URLSafeTimedSerializer(settings.SECRET_KEY, salt="auth-token")
+
+token = _serializer().dumps({"user_id": user.id})   # nunca 'fake-jwt-token-'+id
+
+# middlewares/auth.py — guard reaproveitável por qualquer rota autenticada
+from functools import wraps
+from flask import g, request
+from itsdangerous import BadSignature, SignatureExpired
+from config.settings import settings
+from errors import UnauthorizedError
+
+def _serializer():
+    return URLSafeTimedSerializer(settings.SECRET_KEY, salt="auth-token")
+
+def login_required(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        header = request.headers.get("Authorization", "")
+        token = header[7:] if header.startswith("Bearer ") else header
+        if not token:
+            raise UnauthorizedError("Token de autenticação ausente")
+        try:
+            data = _serializer().loads(token, max_age=settings.TOKEN_MAX_AGE)
+        except (BadSignature, SignatureExpired):
+            raise UnauthorizedError("Token inválido ou expirado")
+        g.current_user_id = data["user_id"]
+        return f(*args, **kwargs)
+    return wrapper
+```
+```python
+# routes/*.py — aplique o guard na registration, não dentro do controller
+user_bp.add_url_rule("/users/<int:user_id>", "delete_user",
+                      login_required(user_controller.delete_user), methods=["DELETE"])
+# criação de conta e login continuam públicos — são o meio de OBTER o token
+user_bp.add_url_rule("/users", "create_user", user_controller.create_user, methods=["POST"])
+user_bp.add_url_rule("/login", "login", user_controller.login, methods=["POST"])
+```
+Aplique `login_required` a **todas** as rotas de recursos do usuário autenticado (tasks,
+categorias, perfil, relatórios pessoais) nos blueprints correspondentes, deixando públicas
+apenas `POST /login` e o cadastro (`POST /users` ou equivalente). `login_required` e
+`admin_required` **não são mutuamente exclusivos**: uma rota administrativa pode compor os
+dois (`admin_required(login_required(handler))`) quando o projeto tiver papéis/roles.

@@ -58,11 +58,16 @@ ao cliente, ambiente marcado como produção com debug ligado.
 **Por que:** o console interativo do Werkzeug/afins permite execução remota de código (RCE).
 **Fix:** playbook P1 (config por env; debug nunca hardcoded).
 
-### C7. Broken Access Control (endpoint perigoso sem auth)
-**Sinais:** endpoints de admin/manutenção sem autenticação: reset de banco, execução de SQL
-arbitrário, relatórios financeiros, delete de qualquer recurso por id sem verificação.
-**Por que:** qualquer um executa ações destrutivas ou lê dados restritos.
-**Fix:** playbook P12 (guard de auth, mantendo o endpoint vivo).
+### C7. Broken Access Control (endpoint sem auth)
+**Sinais:** dois casos — (a) endpoints de admin/manutenção sem autenticação: reset de banco,
+execução de SQL arbitrário, relatórios financeiros amplos, delete de qualquer recurso por id
+sem verificação; (b) caso mais comum: **nenhuma rota de recurso do usuário logado** (tasks,
+perfil, categorias, relatórios pessoais) exige sessão/token válido — login existe e emite
+token, mas nada o valida.
+**Por que:** qualquer um executa ações destrutivas ou lê/altera dados restritos, inclusive de
+outros usuários, sem se autenticar.
+**Fix:** caso (a) → playbook P12 (admin guard). Caso (b), o mais frequente → playbook P13
+(login guard aplicado a todas as rotas de usuário autenticado). Os dois podem coexistir.
 
 ---
 
@@ -97,7 +102,9 @@ matrícula + pagamento + log) com um único commit no fim e sem `try/rollback`.
 **Sinais:** "token" previsível como `'fake-jwt-token-' + user.id`, sem assinatura nem
 expiração; autorização baseada em prefixo de cartão (`card.startsWith("4")`).
 **Por que:** trivial de forjar/burlar.
-**Fix:** playbook P12 (token assinado / abstração de autorização).
+**Fix:** playbook P13 (token assinado com itsdangerous/JWT) **e** verifique se alguma rota de
+fato valida esse token — assinar o token sem aplicar o guard em nenhuma rota deixa o C7(b)
+sem correção.
 
 ---
 

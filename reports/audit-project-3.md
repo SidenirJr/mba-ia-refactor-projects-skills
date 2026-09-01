@@ -171,3 +171,39 @@ Total: 22 findings
 
 Phase 2 complete. Proceed with refactoring (Phase 3)? [y/n]
 > y   (autorizado via aprovação do plano e da abordagem de segurança)
+
+================================
+ADENDO — 2026-09-01
+================================
+Achado: a Fase 3 original assinou o token de login com `itsdangerous` (resolvendo a parte
+"token forjável" do finding [HIGH] "Autenticação ausente e token forjável"), mas nenhuma rota
+de `user_routes.py`, `task_routes.py` ou `category_routes.py` passou a exigi-lo — a
+impersonação apontada no finding continuava trivial (qualquer chamador sem token acessava e
+alterava dados de qualquer usuário).
+
+Correção: adicionado `middlewares/auth.py` com o guard `login_required` (Playbook P13, novo
+no catálogo/playbook da skill — ver `references/02-antipattern-catalog.md` C7/H5 e
+`references/05-refactoring-playbook.md`). Aplicado a todas as rotas de `user_routes.py`
+(exceto cadastro e login, que permanecem públicos), `task_routes.py`, `category_routes.py` e
+`report_routes.py` (mesma falha, não listada no finding original mas mesma causa raiz).
+`itsdangerous` adicionado a `requirements.txt` (usado mas não declarado).
+
+Validação: aplicação sobe sem erros; smoke test confirma 401 em todas as rotas protegidas sem
+token e com token forjado, 200 com token válido emitido pelo `/login`, e `/health`, `/`,
+`POST /users` e `POST /login` seguem públicos.
+
+A skill (`SKILL.md` + playbook) foi reforçada para que a Fase 3 sempre aplique este guard
+sempre que a Fase 2 apontar autenticação ausente fora do contexto administrativo — ver
+Fase 3, regras obrigatórias. Os outros dois projetos deste repositório (`code-smells-project`,
+`ecommerce-api-legacy`) foram reauditados contra o catálogo atualizado: ambos só têm
+endpoints administrativos sem sessão de usuário comum, e ambos já protegem esses endpoints
+com `admin_required`/`adminGuard` — nenhum gap equivalente encontrado.
+
+Achado adicional (fora do escopo dos findings originais): `set_password()` (`models/user.py`)
+usava `generate_password_hash(pwd)` sem fixar o método, herdando o `scrypt` padrão do `werkzeug`
+— indisponível em builds de Python sem OpenSSL com suporte a scrypt (reproduzido no Python 3.9 do
+sistema em macOS), o que derrubava `POST /users` com 500. Corrigido fixando
+`method="pbkdf2:sha256"` (mesma correção aplicada em `code-smells-project`, ver adendo em
+`audit-project-1.md`, e documentada no Playbook P4). Revalidado o fluxo completo via API real:
+`POST /users` (201) → `POST /login` (200, token) → `GET /tasks` com o token (200) e sem token
+(401).

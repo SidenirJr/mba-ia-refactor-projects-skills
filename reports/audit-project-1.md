@@ -178,3 +178,18 @@ Total: 23 findings
 
 Phase 2 complete. Proceed with refactoring (Phase 3)? [y/n]
 > y   (autorizado via aprovação do plano e da abordagem de segurança)
+
+================================
+ADENDO — 2026-09-01
+================================
+Achado (fora do escopo dos findings acima): `generate_password_hash()` (Playbook P4, usado no
+seed de `src/models/database.py` e em `src/services/usuario_service.py`) usa por padrão o método
+`scrypt` do `werkzeug`, que depende de `hashlib.scrypt` — indisponível em builds de Python sem
+OpenSSL com suporte a scrypt (reproduzido no Python 3.9 do sistema em macOS/LibreSSL 2.8.3). Como
+o seed roda dentro de `init_db()`, o efeito era o **boot inteiro falhar**, não apenas o hashing.
+
+Correção: fixado `method="pbkdf2:sha256"` nos dois pontos de hashing. `check_password_hash`
+permanece compatível com qualquer método, então não há impacto em credenciais existentes.
+Revalidado: boot limpo + `POST /login`, `GET /produtos`, `GET /usuarios`, `/admin/query` (401 sem
+token, 200 com token) e `/admin/reset-db` (401 sem token) testados via API real. Nota de
+portabilidade adicionada ao Playbook P4 da skill (sincronizada nos 3 projetos).

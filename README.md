@@ -71,7 +71,7 @@ correspondente):
 | `references/02-antipattern-catalog.md` | ~20 anti-patterns + seção de APIs deprecated (severidade + sinais) |
 | `references/03-audit-report-template.md` | Formato padronizado do relatório |
 | `references/04-mvc-architecture-guidelines.md` | Camadas MVC + mapa de tradução Python↔Node |
-| `references/05-refactoring-playbook.md` | 12 transformações antes/depois (Python e Node) |
+| `references/05-refactoring-playbook.md` | 13 transformações antes/depois (Python e Node) |
 
 **Anti-patterns incluídos e por quê.** O catálogo (CRITICAL→LOW) foi derivado diretamente da
 análise manual: cada problema real virou um **sinal de detecção acionável** (ex.: "query SQL por
@@ -91,8 +91,13 @@ Python, `package.json` → Node); (2) **mapa de tradução de camadas** nas guid
 método+path usado como base do smoke test da Fase 3. (2) *Timezone no SQLAlchemy/SQLite* (mistura
 aware/naive ao trocar `datetime.utcnow`) → helper `utcnow()` que retorna UTC **naive**, removendo a
 deprecação sem quebrar comparações. (3) *Build nativo do `sqlite3` no Node 24* → validado antes de
-construir sobre ele. (4) *Endpoints perigosos* → em vez de removê-los, foram protegidos por
-**admin-guard**, mantendo "todos os endpoints respondem".
+construir sobre ele. (4) *Endpoints perigosos* → em vez de removê-los, foram protegidos por guard,
+mantendo "todos os endpoints respondem": **admin-guard** (Playbook P12) para rotas administrativas
+isoladas (P1/P2), e **login-guard** (Playbook P13, adicionado depois de uma auditoria de revisão)
+para todo endpoint de recurso do usuário autenticado — o gap real encontrado no P3, onde a Fase 3
+original assinou o token de login com `itsdangerous` mas nenhuma rota o validava, deixando a
+impersonação do finding [HIGH] "Autenticação ausente e token forjável" sem correção efetiva. Ver
+adendo em [`reports/audit-project-3.md`](reports/audit-project-3.md).
 
 ---
 
@@ -114,6 +119,9 @@ construir sobre ele. (4) *Endpoints perigosos* → em vez de removê-los, foram 
   routes / middlewares` + bootstrap async com injeção de dependência.
 - **P3:** parcialmente em camadas (sem controller/service) → adicionadas as camadas
   `controllers/` e `services/` + `category_routes` + `middlewares/`; lógica saiu das rotas.
+  Correção posterior: `middlewares/auth.py` (`login_required`) passou a validar o token
+  `itsdangerous` em todas as rotas de `user_routes.py` (exceto cadastro/login), `task_routes.py`,
+  `category_routes.py` e `report_routes.py` — o token era assinado mas nenhuma rota o exigia.
 
 ### Validação (smoke tests reais — app no ar + requisições)
 
@@ -121,11 +129,25 @@ construir sobre ele. (4) *Endpoints perigosos* → em vez de removê-los, foram 
 |---|---|---|---|
 | 1 | ✅ sobe sem erros | 19/19 respondem | **25/25 OK** |
 | 2 | ✅ sobe sem erros | 3/3 respondem | **10/10 OK** |
-| 3 | ✅ sobe sem erros | 22/22 respondem | **27/27 OK** |
+| 1 | ✅ sobe sem erros | 8/8 respondem (revalidado) | **25/25 OK** |
+| 2 | ✅ sobe sem erros | 4/4 respondem (revalidado) | **10/10 OK** |
+| 3 | ✅ sobe sem erros | 22/22 respondem | **34/34 OK** (revalidado em 2026-09-01) |
 
 Provas de segurança verificadas em runtime: SQLi de login bloqueado (P1, 401); logs sem
 cartão/chave (P2); sem `password`/`secret` nas respostas e token assinado no lugar do fake-jwt (P3);
-endpoints `/admin/*` retornam 401 sem token e 200 com token.
+endpoints `/admin/*` retornam 401 sem token e 200 com token (P1/P2). No P3, **todas** as rotas de
+`users` (exceto cadastro/login), `tasks`, `categories` e `reports` retornam 401 sem token/com token
+forjado e 200 com o token emitido no `/login` — os 34 checks cobrem os 22 endpoints do inventário,
+testando o par negativo (sem auth) e positivo (com auth) nas rotas protegidas.
+
+> **Correção de portabilidade (P1 e P3, 2026-09-01):** `werkzeug.security.generate_password_hash`
+> usa por padrão o método `scrypt`, que depende de `hashlib.scrypt` — ausente em builds de Python
+> sem OpenSSL com suporte a scrypt (reproduzido no Python 3.9 do sistema em macOS, LibreSSL 2.8.3;
+> em P1 isso derrubava o boot inteiro, pois o seed roda no `init_db()`). Corrigido fixando
+> `method="pbkdf2:sha256"` em todos os pontos de hashing (`code-smells-project/src/models/database.py`,
+> `src/services/usuario_service.py`, `task-manager-api/models/user.py`) e documentado no Playbook P4
+> como recomendação de portabilidade. `check_password_hash` continua compatível com qualquer método.
+> Revalidado de ponta a ponta nos 3 projetos após a correção (cadastro → login → rota protegida).
 
 ### Checklist de Validação (preenchido para os 3 projetos)
 

@@ -1,7 +1,7 @@
 @baseUrl = http://localhost:3000
 @adminToken = dev-admin-token-change-me
 
-### Checkout - sucesso
+### Checkout - sucesso (cartão de teste válido pelo checksum de Luhn)
 POST {{baseUrl}}/api/checkout
 Content-Type: application/json
 
@@ -10,10 +10,10 @@ Content-Type: application/json
   "eml": "gui@fullcycle.com.br",
   "pwd": "senhaforte",
   "c_id": 2,
-  "card": "4111222233334444"
+  "card": "4242424242424242"
 }
 
-### Checkout - pagamento recusado
+### Checkout - pagamento recusado (cartão de teste reservado para recusa no gateway)
 POST {{baseUrl}}/api/checkout
 Content-Type: application/json
 
@@ -22,7 +22,19 @@ Content-Type: application/json
   "eml": "joao@teste.com",
   "pwd": "123",
   "c_id": 1,
-  "card": "5111222233334444"
+  "card": "4000000000000002"
+}
+
+### Checkout - cartão estruturalmente inválido (falha no checksum de Luhn)
+POST {{baseUrl}}/api/checkout
+Content-Type: application/json
+
+{
+  "usr": "Maria",
+  "eml": "maria@teste.com",
+  "pwd": "123",
+  "c_id": 1,
+  "card": "1234567890123456"
 }
 
 ### Relatório financeiro administrativo (protegido por token)

@@ -8,11 +8,15 @@ from errors import NotFoundError
 from models.task import Task
 from models.user import User
 from models.category import Category
+from services.authorization import require_admin, require_self_or_admin
 from utils.helpers import calculate_percentage, utcnow
 
 
 class ReportService:
-    def summary(self):
+    def summary(self, actor):
+        # O resumo cruza produtividade nominal de todos os usuários: é relatório
+        # de administração, não dado do próprio requisitante.
+        require_admin(actor)
         now = utcnow()
         seven_days_ago = now - timedelta(days=7)
 
@@ -100,7 +104,8 @@ class ReportService:
             'user_productivity': user_stats,
         }
 
-    def user_report(self, user_id):
+    def user_report(self, user_id, actor):
+        require_self_or_admin(actor, user_id)
         user = db.session.get(User, user_id)
         if not user:
             raise NotFoundError('Usuário não encontrado')

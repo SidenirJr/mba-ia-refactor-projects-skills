@@ -1,5 +1,5 @@
 """Controller fino de usuários e login."""
-from flask import jsonify, request
+from flask import g, jsonify, request
 
 
 class UsuarioController:
@@ -10,7 +10,10 @@ class UsuarioController:
         return jsonify({"dados": self.service.listar(), "sucesso": True}), 200
 
     def buscar(self, usuario_id):
-        return jsonify({"dados": self.service.buscar(usuario_id), "sucesso": True}), 200
+        # O controller resolve o usuário atual (flask.g) e o passa ao service, que aplica
+        # a regra de dono/admin — o service continua sem conhecer Flask.
+        dados = self.service.buscar(usuario_id, g.get("current_user"))
+        return jsonify({"dados": dados, "sucesso": True}), 200
 
     def criar(self):
         dados = request.get_json(silent=True)

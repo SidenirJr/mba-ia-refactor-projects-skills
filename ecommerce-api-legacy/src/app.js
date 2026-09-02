@@ -1,5 +1,15 @@
 const express = require('express');
 
+// Fail-fast de configuração: settings.js lança se ADMIN_TOKEN/PAYMENT_GATEWAY_KEY não
+// vierem do ambiente. Sem isso a app subiria com segredos default versionados.
+try {
+  require('./config/settings');
+} catch (err) {
+  console.error(`[config] ${err.message}`);
+  if (require.main === module) process.exit(1);
+  throw err;
+}
+
 const settings = require('./config/settings');
 const { Database, initSchema } = require('./config/database');
 
@@ -24,6 +34,7 @@ const checkoutRoutes = require('./routes/checkoutRoutes');
 const reportRoutes = require('./routes/reportRoutes');
 const userRoutes = require('./routes/userRoutes');
 const { errorHandler } = require('./middlewares/errorHandler');
+const { NotFoundError } = require('./errors');
 
 // Composition root: cria o banco, instancia e injeta as dependências, monta as rotas.
 async function createApp() {
@@ -59,6 +70,9 @@ async function createApp() {
   app.use('/api', checkoutRoutes(checkoutController(checkoutService)));
   app.use('/api', reportRoutes(reportController(reportService)));
   app.use('/api', userRoutes(userController(userService)));
+
+  // 404 catch-all: rota desconhecida responde JSON (antes vazava o HTML default do Express).
+  app.use((req, res, next) => next(new NotFoundError('Rota não encontrada')));
   app.use(errorHandler);
   return app;
 }

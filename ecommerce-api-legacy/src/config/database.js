@@ -7,6 +7,11 @@ const passwordHasher = require('../services/passwordHasher');
 class Database {
   constructor(path) {
     this.db = new sqlite3.Database(path);
+    // O sqlite3 usa UMA conexão compartilhada e BEGIN é estado da conexão, não do request:
+    // dois checkouts concorrentes aninhavam BEGIN e estouravam
+    // "SQLITE_ERROR: cannot start a transaction within a transaction".
+    // Esta fila de promessas serializa as transações — uma por vez, na ordem de chegada.
+    this.transactionQueue = Promise.resolve();
   }
 
   run(sql, params = []) {
@@ -30,14 +35,30 @@ class Database {
     });
   }
 
-  async transaction(work) {
-    await this.run('BEGIN');
+  // Enfileira a transação: só começa quando a anterior terminou (commit, rollback ou erro).
+  transaction(work) {
+    const started = this.transactionQueue.then(
+      () => this.runInTransaction(work),
+      () => this.runInTransaction(work), // um erro anterior não pode travar a fila
+    );
+    this.transactionQueue = started.then(() => undefined, () => undefined);
+    return started;
+  }
+
+  async runInTransaction(work) {
     try {
+      // BEGIN dentro do try: se ele falhar, o ROLLBACK de limpeza também é tentado.
+      await this.run('BEGIN');
       const result = await work();
       await this.run('COMMIT');
       return result;
     } catch (err) {
-      await this.run('ROLLBACK');
+      try {
+        await this.run('ROLLBACK');
+      } catch (rollbackErr) {
+        // Não mascara o erro original (ex.: se o BEGIN falhou, não há transação para desfazer).
+        console.warn('[db] ROLLBACK não aplicado:', rollbackErr.message);
+      }
       throw err;
     }
   }

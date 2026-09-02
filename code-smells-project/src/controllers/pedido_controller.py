@@ -1,5 +1,5 @@
 """Controller fino de pedidos."""
-from flask import jsonify, request
+from flask import g, jsonify, request
 
 
 class PedidoController:
@@ -10,11 +10,14 @@ class PedidoController:
         dados = request.get_json(silent=True)
         if not dados:
             return jsonify({"erro": "Dados inválidos"}), 400
-        resultado = self.service.criar(dados.get("usuario_id"), dados.get("itens", []))
+        # `usuario_id` do corpo é deliberadamente ignorado: o dono do pedido é o usuário
+        # autenticado (o service deriva do token).
+        resultado = self.service.criar(g.get("current_user"), dados.get("itens", []))
         return jsonify({"dados": resultado, "sucesso": True, "mensagem": "Pedido criado com sucesso"}), 201
 
     def listar_por_usuario(self, usuario_id):
-        return jsonify({"dados": self.service.listar_por_usuario(usuario_id), "sucesso": True}), 200
+        dados = self.service.listar_por_usuario(usuario_id, g.get("current_user"))
+        return jsonify({"dados": dados, "sucesso": True}), 200
 
     def listar_todos(self):
         return jsonify({"dados": self.service.listar_todos(), "sucesso": True}), 200

@@ -1,5 +1,6 @@
 """Regras de negócio de pedidos: validação, cálculo de total, estoque e orquestração."""
 from src.errors import BusinessError, NotFoundError, ValidationError
+from src.services.authorization import require_self_or_admin, require_user
 
 STATUS_VALIDOS = ["pendente", "aprovado", "enviado", "entregue", "cancelado"]
 
@@ -10,9 +11,14 @@ class PedidoService:
         self.produto_repo = produto_repo
         self.notifications = notification_service
 
-    def criar(self, usuario_id, itens):
-        if not usuario_id:
-            raise ValidationError("Usuario ID é obrigatório")
+    def criar(self, current_user, itens):
+        """O pedido é sempre do usuário autenticado.
+
+        O `usuario_id` eventualmente enviado no corpo é ignorado — não é possível criar
+        pedido em nome de terceiro (nem baixar o estoque na conta dele).
+        """
+        require_user(current_user)
+        usuario_id = current_user["id"]
         if not itens:
             raise ValidationError("Pedido deve ter pelo menos 1 item")
 
@@ -38,7 +44,8 @@ class PedidoService:
             self.notifications.pedido_criado(pedido_id, usuario_id)
         return {"pedido_id": pedido_id, "total": total}
 
-    def listar_por_usuario(self, usuario_id):
+    def listar_por_usuario(self, usuario_id, current_user=None):
+        require_self_or_admin(current_user, usuario_id)
         return self.pedido_repo.by_user(usuario_id)
 
     def listar_todos(self):

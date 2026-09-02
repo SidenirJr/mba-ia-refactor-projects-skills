@@ -1,5 +1,8 @@
 @baseUrl = http://localhost:3000
-@adminToken = dev-admin-token-change-me
+# O token NÃO está versionado aqui: ele é lido do ambiente (mesmo ADMIN_TOKEN com que a
+# app foi iniciada). No VS Code REST Client use {{$processEnv ADMIN_TOKEN}} (variável
+# exportada no shell) ou {{$dotenv ADMIN_TOKEN}} (arquivo .env local, não versionado).
+@adminToken = {{$processEnv ADMIN_TOKEN}}
 
 ### Checkout - sucesso (cartão de teste válido pelo checksum de Luhn)
 POST {{baseUrl}}/api/checkout
@@ -44,3 +47,34 @@ X-Admin-Token: {{adminToken}}
 ### Deletar usuário (protegido por token)
 DELETE {{baseUrl}}/api/users/1
 X-Admin-Token: {{adminToken}}
+
+### Checkout - cartão enviado como número JSON (sem aspas) — também é aceito
+POST {{baseUrl}}/api/checkout
+Content-Type: application/json
+
+{
+  "usr": "Ana",
+  "eml": "ana@teste.com",
+  "pwd": "senhaforte",
+  "c_id": 2,
+  "card": 4242424242424242
+}
+
+### Checkout - PAN curto (12 dígitos, Luhn-válido mas fora da faixa 13-19) — recusado
+POST {{baseUrl}}/api/checkout
+Content-Type: application/json
+
+{
+  "usr": "Bruno",
+  "eml": "bruno@teste.com",
+  "pwd": "senhaforte",
+  "c_id": 1,
+  "card": "444444444442"
+}
+
+### Deletar usuário inexistente (agora 404, antes 200 com deleted:false)
+DELETE {{baseUrl}}/api/users/999
+X-Admin-Token: {{adminToken}}
+
+### Rota inexistente (404 em JSON, não HTML do Express)
+GET {{baseUrl}}/api/rota-que-nao-existe

@@ -1,4 +1,6 @@
 """Script para popular o banco com dados iniciais"""
+from sqlalchemy import func
+
 from app import app, db
 from models.task import Task
 from models.user import User
@@ -6,12 +8,17 @@ from models.category import Category
 from datetime import timedelta
 from utils.helpers import utcnow
 
+def _count(model):
+    return db.session.scalar(db.select(func.count()).select_from(model)) or 0
+
+
 def seed_data():
     with app.app_context():
 
-        Task.query.delete()
-        User.query.delete()
-        Category.query.delete()
+        # API 2.0 do SQLAlchemy — `Model.query` é a interface legada
+        db.session.execute(db.delete(Task))
+        db.session.execute(db.delete(User))
+        db.session.execute(db.delete(Category))
         db.session.commit()
 
         u1 = User()
@@ -92,9 +99,9 @@ def seed_data():
 
         db.session.commit()
         print("Seed concluído com sucesso!")
-        print(f"  {User.query.count()} usuários")
-        print(f"  {Category.query.count()} categorias")
-        print(f"  {Task.query.count()} tasks")
+        print(f"  {_count(User)} usuários")
+        print(f"  {_count(Category)} categorias")
+        print(f"  {_count(Task)} tasks")
 
 if __name__ == '__main__':
     seed_data()

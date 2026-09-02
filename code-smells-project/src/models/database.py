@@ -3,12 +3,15 @@
 A conexão é criada por requisição via `flask.g` e fechada no teardown, evitando o
 singleton global mutável compartilhado entre threads do código original.
 """
+import logging
 import sqlite3
 
 from flask import g
 from werkzeug.security import generate_password_hash
 
 from src.config.settings import settings
+
+logger = logging.getLogger(__name__)
 
 SCHEMA = [
     """
@@ -27,7 +30,7 @@ SCHEMA = [
     CREATE TABLE IF NOT EXISTS usuarios (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         nome TEXT,
-        email TEXT,
+        email TEXT NOT NULL UNIQUE,
         senha TEXT,
         tipo TEXT DEFAULT 'cliente',
         criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -51,6 +54,13 @@ SCHEMA = [
         preco_unitario REAL
     )
     """,
+]
+
+
+# Índices/constraints aplicados também a bancos já existentes (CREATE TABLE IF NOT
+# EXISTS não altera tabelas criadas antes da constraint de unicidade).
+MIGRATIONS = [
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_usuarios_email ON usuarios (email)",
 ]
 
 
@@ -83,6 +93,16 @@ def init_db():
     try:
         for stmt in SCHEMA:
             conn.execute(stmt)
+        conn.commit()
+        for stmt in MIGRATIONS:
+            try:
+                conn.execute(stmt)
+            except sqlite3.IntegrityError:
+                # Banco legado com e-mails duplicados: registra e segue sem quebrar o boot.
+                logger.error(
+                    "Não foi possível aplicar a unicidade de e-mail: existem registros "
+                    "duplicados em `usuarios`. Limpe os duplicados e reinicie."
+                )
         conn.commit()
         if conn.execute("SELECT COUNT(*) FROM produtos").fetchone()[0] == 0:
             _seed(conn)

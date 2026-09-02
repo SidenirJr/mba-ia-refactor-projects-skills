@@ -24,26 +24,56 @@ class CheckoutService {
 
     // Autoriza o pagamento ANTES de qualquer escrita — evita usuário/matrícula órfãos
     // quando o pagamento é recusado (bug do código original).
-    const payment = await this.gateway.charge(card, course.price);
-    if (payment.status === 'DENIED') throw new PaymentError('Pagamento recusado');
+    const charge = await this.gateway.charge(card, course.price);
+    if (charge.status === 'DENIED') throw new PaymentError('Pagamento recusado');
 
-    // Criação de usuário (se necessário) + matrícula + pagamento + auditoria, atomicamente.
-    return this.db.transaction(async () => {
-      let userId;
-      const existing = await this.users.findByEmail(email);
-      if (existing) {
-        userId = existing.id;
-      } else {
-        // sem default fraco "123456": gera senha aleatória quando não informada
-        const plain = password || crypto.randomBytes(12).toString('hex');
-        userId = await this.users.create(name, email, this.hasher.hash(plain));
-      }
+    try {
+      // Criação de usuário (se necessário) + matrícula + pagamento + auditoria, atomicamente.
+      return await this.db.transaction(async () => {
+        let userId;
+        const existing = await this.users.findByEmail(email);
+        if (existing) {
+          userId = existing.id;
+        } else {
+          // sem default fraco "123456": gera senha aleatória quando não informada
+          const plain = password || crypto.randomBytes(12).toString('hex');
+          userId = await this.users.create(name, email, this.hasher.hash(plain));
+        }
 
-      const enrollmentId = await this.enrollments.create(userId, courseId);
-      await this.payments.create(enrollmentId, course.price, payment.status);
-      await this.audit.create(`Checkout curso ${courseId} por ${userId}`);
-      return { msg: 'Sucesso', enrollment_id: enrollmentId };
+        const enrollmentId = await this.enrollments.create(userId, courseId);
+        await this.payments.create(enrollmentId, course.price, charge.status);
+        await this.audit.create(`Checkout curso ${courseId} por ${userId}`);
+        return { msg: 'Sucesso', enrollment_id: enrollmentId };
+      });
+    } catch (err) {
+      // A cobrança já foi aprovada no gateway, mas a persistência falhou: sem compensação
+      // o cliente ficava cobrado sem matrícula. Estorna e propaga o erro.
+      await this.compensateCharge(charge, err);
+      throw err;
+    }
+  }
+
+  async compensateCharge(charge, cause) {
+    console.error('[checkout] persistência falhou após cobrança aprovada, estornando cobrança', {
+      transactionId: charge.transactionId,
+      amount: charge.amount,
+      causa: cause && cause.message,
     });
+    try {
+      const refund = await this.gateway.refund(charge.transactionId, charge.amount);
+      console.error('[checkout] cobrança estornada com sucesso', {
+        transactionId: charge.transactionId,
+        amount: charge.amount,
+        status: refund.status,
+      });
+    } catch (refundErr) {
+      // Falha do estorno não pode esconder o erro original; exige conciliação manual.
+      console.error('[checkout] FALHA AO ESTORNAR COBRANÇA — conciliação manual necessária', {
+        transactionId: charge.transactionId,
+        amount: charge.amount,
+        erro: refundErr.message,
+      });
+    }
   }
 }
 

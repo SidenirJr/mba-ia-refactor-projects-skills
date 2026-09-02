@@ -1,31 +1,21 @@
-"""Endpoints administrativos. Continuam existindo, mas agora protegidos por admin-guard
-(ver registro de rotas). A execução de SQL arbitrário permanece sensível por natureza —
-mantida sob autenticação conforme decisão de preservar os endpoints."""
-from flask import jsonify, request
+"""Endpoints administrativos (HTTP fino).
 
-TABELAS = ("itens_pedido", "pedidos", "produtos", "usuarios")
+Protegidos por header `X-Admin-Token` **e** sessão de usuário admin (ver routes.py).
+Nenhum SQL aqui: o controller delega para o `AdminService`, que valida a consulta, e o
+`AdminRepository`, que a executa em modo somente-leitura.
+"""
+from flask import jsonify, request
 
 
 class AdminController:
-    def __init__(self, get_db):
-        self._get_db = get_db
+    def __init__(self, service):
+        self.service = service
 
     def reset_db(self):
-        db = self._get_db()
-        for tabela in TABELAS:  # lista fixa — sem interpolação de input
-            db.execute(f"DELETE FROM {tabela}")
-        db.commit()
-        return jsonify({"mensagem": "Banco de dados resetado", "sucesso": True}), 200
+        resultado = self.service.reset_db()
+        return jsonify({"mensagem": resultado["mensagem"], "sucesso": True}), 200
 
     def query(self):
         dados = request.get_json(silent=True) or {}
-        sql = dados.get("sql", "")
-        if not sql:
-            return jsonify({"erro": "Query não informada"}), 400
-        db = self._get_db()
-        cur = db.execute(sql)
-        if sql.strip().upper().startswith("SELECT"):
-            rows = cur.fetchall()
-            return jsonify({"dados": [dict(r) for r in rows], "sucesso": True}), 200
-        db.commit()
-        return jsonify({"mensagem": "Query executada", "sucesso": True}), 200
+        linhas = self.service.executar_consulta(dados.get("sql", ""))
+        return jsonify({"dados": linhas, "sucesso": True}), 200

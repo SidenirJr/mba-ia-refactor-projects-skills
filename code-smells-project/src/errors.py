@@ -20,8 +20,26 @@ class NotFoundError(AppError):
 
 
 class UnauthorizedError(AppError):
+    """Falta de autenticação (sem token / token inválido)."""
+
     status_code = 401
+
+
+class ForbiddenError(AppError):
+    """Autenticado, mas sem permissão para o recurso."""
+
+    status_code = 403
+
+
+class ConflictError(AppError):
+    """Violação de unicidade / estado conflitante (ex.: e-mail já cadastrado)."""
+
+    status_code = 409
 
 
 class BusinessError(AppError):
     status_code = 400
+
+
+class ConfigError(RuntimeError):
+    """Configuração obrigatória ausente/ inválida — impede a subida da aplicação."""

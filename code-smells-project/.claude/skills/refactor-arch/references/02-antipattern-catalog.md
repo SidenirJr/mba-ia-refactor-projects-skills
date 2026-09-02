@@ -99,12 +99,26 @@ matrícula + pagamento + log) com um único commit no fim e sem `try/rollback`.
 **Fix:** playbook P8.
 
 ### H5. Fake / Forgeable Auth Token
-**Sinais:** "token" previsível como `'fake-jwt-token-' + user.id`, sem assinatura nem
-expiração; autorização baseada em prefixo de cartão (`card.startsWith("4")`).
+**Sinais:** "token" de **identidade/sessão** previsível como `'fake-jwt-token-' + user.id`,
+sem assinatura nem expiração. Se o que está sendo decidido não é "quem é o usuário" e sim
+"este pagamento/operação de negócio deve ser aprovado", o sinal é H6, não este.
 **Por que:** trivial de forjar/burlar.
 **Fix:** playbook P13 (token assinado com itsdangerous/JWT) **e** verifique se alguma rota de
 fato valida esse token — assinar o token sem aplicar o guard em nenhuma rota deixa o C7(b)
 sem correção.
+
+### H6. Fake Business/Domain Verification (regra de negócio simulada)
+**Sinais:** decisão de aprovação/rejeição de um processo de negócio sensível (pagamento,
+crédito, elegibilidade, KYC) resolvida por uma heurística sem relação real com a verificação
+que deveria ocorrer: `card.startsWith("4")` "autoriza" pelo prefixo de bandeira sem checksum
+nem emissor real; `if (idade > 18)` sem checar documento; qualquer decisão hardcoded/sempre
+positiva fora de casos de teste conhecidos.
+**Por que:** dá falsa sensação de verificação — o padrão é descoberto e contornado
+deliberadamente (“todo cartão iniciado em 4 é aprovado”). **Mover esse código de um handler
+para uma classe/service (Playbook P3/P6) não resolve nada se a lógica em si continuar fake**
+— isso é só reorganização, não correção.
+**Fix:** playbook P14 (verificação real no stub: validação estrutural/checksum + casos de
+teste determinísticos, na mesma convenção usada por gateways reais em modo sandbox).
 
 ---
 

@@ -4,7 +4,7 @@ Padrões de transformação **antes/depois** para os anti-patterns do catálogo.
 mapeia para um ou mais findings. Aplique por ordem de severidade. Os exemplos cobrem
 Python/Flask e Node/Express para reforçar o agnosticismo.
 
-> ≥8 padrões exigidos; abaixo há 13 (P1–P13).
+> ≥8 padrões exigidos; abaixo há 14 (P1–P14).
 
 ---
 
@@ -395,3 +395,70 @@ categorias, perfil, relatórios pessoais) nos blueprints correspondentes, deixan
 apenas `POST /login` e o cadastro (`POST /users` ou equivalente). `login_required` e
 `admin_required` **não são mutuamente exclusivos**: uma rota administrativa pode compor os
 dois (`admin_required(login_required(handler))`) quando o projeto tiver papéis/roles.
+
+---
+
+## P14 — Substituir verificação de negócio fake por checagem real (sandbox)
+
+Resolve: H6 (fake business/domain verification) — decisões de negócio sensíveis (pagamento,
+crédito, elegibilidade) hoje decididas por uma heurística sem relação com a verificação real.
+**Não é o mesmo problema de P13**: P13 valida *quem é o usuário* (identidade/sessão); P14
+valida *se a operação de negócio em si é legítima* — mover o código para uma classe/service
+(P3/P6) sem trocar a lógica **não fecha o finding**, só reorganiza o mesmo bug.
+
+**Antes (Node — "aprova" pagamento pela bandeira do cartão)**
+```js
+class PaymentGateway {
+  async charge(card, amount) {
+    const status = card.startsWith("4") ? "PAID" : "DENIED";  // qualquer Visa passa
+    return { status, amount };
+  }
+}
+```
+**Depois (validação estrutural real + casos de teste determinísticos, como um gateway real em
+modo sandbox)**
+```js
+// Cartões de teste que o "emissor" simulado sempre recusa — mesma convenção usada por
+// gateways reais em sandbox (ex.: Stripe), Luhn-válidos mas reservados para o caminho de erro.
+const DECLINED_TEST_CARDS = new Set(["4000000000000002", "4000000000009995"]);
+
+function isLuhnValid(card) {
+  const digits = String(card).replace(/\D/g, "");
+  if (digits.length < 12 || digits.length > 19) return false;
+  let sum = 0, dbl = false;
+  for (let i = digits.length - 1; i >= 0; i--) {
+    let d = digits.charCodeAt(i) - 48;
+    if (dbl) { d *= 2; if (d > 9) d -= 9; }
+    sum += d; dbl = !dbl;
+  }
+  return sum % 10 === 0;
+}
+
+class PaymentGateway {
+  async charge(card, amount) {
+    if (!isLuhnValid(card)) return { status: "DENIED", reason: "invalid_card_number", amount };
+    if (DECLINED_TEST_CARDS.has(String(card).replace(/\D/g, "")))
+      return { status: "DENIED", reason: "card_declined", amount };
+    return { status: "PAID", amount };
+  }
+}
+```
+**Python (mesmo princípio — nunca aprovar por heurística superficial):**
+```python
+def is_valid_cpf(cpf):  # exemplo de outro domínio: "if len(cpf) == 11: aprovado" é o mesmo bug
+    digits = [int(c) for c in cpf if c.isdigit()]
+    if len(digits) != 11 or len(set(digits)) == 1:
+        return False
+    for i in (9, 10):
+        total = sum(d * w for d, w in zip(digits[:i], range(i + 1, 1, -1)))
+        digito = (total * 10 % 11) % 10
+        if digito != digits[i]:
+            return False
+    return True
+```
+O princípio se generaliza a qualquer "verificação" de negócio: se a regra real é conhecida
+(Luhn para cartão, dígito verificador de CPF/CNPJ, faixa etária com documento, etc.), implemente
+essa regra — não um atalho que aprova com base em um padrão previsível e adivinhável pelo
+usuário. Quando não há como validar contra um provedor real (sandbox/exercício), documente e
+use uma lista fixa e pequena de casos de teste conhecidos para os caminhos de erro, como fazem
+gateways de pagamento reais em ambiente de teste.

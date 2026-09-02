@@ -125,6 +125,14 @@ Objetivo: reestruturar para MVC, eliminar os problemas e **provar que ainda func
      é obrigatório aplicar `login_required` a **todas** as rotas do(s) blueprint(s) afetado(s)
      que exigem usuário logado, deixando públicas só login e cadastro. Emitir um token
      assinado sem nenhuma rota validá-lo **não fecha** o finding.
+   - **Sempre que a Fase 2 apontar uma verificação de negócio decidida por heurística fraca**
+     disfarçada de validação real (finding tipo H6 do catálogo — ex.: `card.startsWith("4")`
+     "autorizando" pagamento), a Fase 3 não pode se limitar a mover esse código para uma
+     classe/service (Playbook P3/P6) mantendo a mesma lógica. É obrigatório aplicar Playbook
+     P14: implementar a verificação real correspondente (checksum/validação estrutural) e, para
+     a decisão que dependeria de um provedor externo indisponível no exercício, uma lista
+     determinística e pequena de casos de teste conhecidos — nunca "aprova tudo que bater num
+     padrão previsível". Reorganizar o código sem trocar a lógica **não fecha** o finding.
 4. **Valide** o resultado:
    - A aplicação **inicia sem erros** (suba o processo).
    - **Todos os endpoints do inventário da Fase 1 respondem** (smoke test: requisições reais

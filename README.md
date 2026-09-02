@@ -71,7 +71,7 @@ correspondente):
 | `references/02-antipattern-catalog.md` | ~20 anti-patterns + seção de APIs deprecated (severidade + sinais) |
 | `references/03-audit-report-template.md` | Formato padronizado do relatório |
 | `references/04-mvc-architecture-guidelines.md` | Camadas MVC + mapa de tradução Python↔Node |
-| `references/05-refactoring-playbook.md` | 13 transformações antes/depois (Python e Node) |
+| `references/05-refactoring-playbook.md` | 14 transformações antes/depois (Python e Node) |
 
 **Anti-patterns incluídos e por quê.** O catálogo (CRITICAL→LOW) foi derivado diretamente da
 análise manual: cada problema real virou um **sinal de detecção acionável** (ex.: "query SQL por
@@ -97,7 +97,14 @@ isoladas (P1/P2), e **login-guard** (Playbook P13, adicionado depois de uma audi
 para todo endpoint de recurso do usuário autenticado — o gap real encontrado no P3, onde a Fase 3
 original assinou o token de login com `itsdangerous` mas nenhuma rota o validava, deixando a
 impersonação do finding [HIGH] "Autenticação ausente e token forjável" sem correção efetiva. Ver
-adendo em [`reports/audit-project-3.md`](reports/audit-project-3.md).
+adendo em [`reports/audit-project-3.md`](reports/audit-project-3.md). (5) *Verificação de negócio
+fake movida, mas não corrigida* → no P2, a Fase 3 original isolou `card.startsWith("4")` numa
+classe `PaymentGateway` sem trocar a heurística, deixando o finding [HIGH] "Autorização de
+pagamento fake" de pé. Novo anti-pattern **H6** (fake business verification, distinto de H5 —
+identidade ≠ legitimidade da operação) e novo **Playbook P14**: verificação estrutural real
+(checksum de Luhn) + lista determinística de casos de teste conhecidos para os caminhos de erro,
+na mesma convenção de gateways reais em sandbox. Ver adendo em
+[`reports/audit-project-2.md`](reports/audit-project-2.md).
 
 ---
 
@@ -127,10 +134,8 @@ adendo em [`reports/audit-project-3.md`](reports/audit-project-3.md).
 
 | Projeto | Boot | Endpoints | Checks |
 |---|---|---|---|
-| 1 | ✅ sobe sem erros | 19/19 respondem | **25/25 OK** |
-| 2 | ✅ sobe sem erros | 3/3 respondem | **10/10 OK** |
-| 1 | ✅ sobe sem erros | 8/8 respondem (revalidado) | **25/25 OK** |
-| 2 | ✅ sobe sem erros | 4/4 respondem (revalidado) | **10/10 OK** |
+| 1 | ✅ sobe sem erros | 19/19 respondem | **25/25 OK** (+ 8 checks revalidados em 2026-09-01) |
+| 2 | ✅ sobe sem erros | 3/3 respondem | **10/10 OK** (+ 8 checks revalidados em 2026-09-02, incl. o fix de pagamento) |
 | 3 | ✅ sobe sem erros | 22/22 respondem | **34/34 OK** (revalidado em 2026-09-01) |
 
 Provas de segurança verificadas em runtime: SQLi de login bloqueado (P1, 401); logs sem
@@ -138,7 +143,11 @@ cartão/chave (P2); sem `password`/`secret` nas respostas e token assinado no lu
 endpoints `/admin/*` retornam 401 sem token e 200 com token (P1/P2). No P3, **todas** as rotas de
 `users` (exceto cadastro/login), `tasks`, `categories` e `reports` retornam 401 sem token/com token
 forjado e 200 com o token emitido no `/login` — os 34 checks cobrem os 22 endpoints do inventário,
-testando o par negativo (sem auth) e positivo (com auth) nas rotas protegidas.
+testando o par negativo (sem auth) e positivo (com auth) nas rotas protegidas. No P2, o gateway de
+pagamento foi revalidado com o par negativo/positivo do checksum: cartão "bandeira Visa"
+(`4000000000000001`) mas Luhn-inválido → **400** (antes seria sempre aprovado só pelo prefixo);
+cartão "bandeira Mastercard" (`5555555555554444`) mas Luhn-válido → **200** (antes seria sempre
+recusado só pelo prefixo) — prova de que a decisão não depende mais da bandeira do cartão.
 
 > **Correção de portabilidade (P1 e P3, 2026-09-01):** `werkzeug.security.generate_password_hash`
 > usa por padrão o método `scrypt`, que depende de `hashlib.scrypt` — ausente em builds de Python

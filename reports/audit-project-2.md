@@ -64,7 +64,10 @@ Recommendation: Guard de admin (token via env), mantendo os endpoints vivos. Pla
 File: AppManager.js:46
 Description: `let status = cc.startsWith("4") ? "PAID" : "DENIED"` — aprova pagamento pela bandeira do cartão, sem gateway real.
 Impact: Lógica de pagamento fictícia e acoplada ao handler.
-Recommendation: Abstração `PaymentGateway.charge()` (stub de sandbox isolado, sem logar segredos). Playbook P6/P12.
+Recommendation: Abstração `PaymentGateway.charge()` isolada do handler **e** verificação real
+dentro dela (checksum estrutural + casos de teste determinísticos) — mover o código para uma
+classe sem trocar a heurística não resolve o finding. Playbook P3/P6 (extrair) + **P14**
+(verificação real). Catálogo: H6.
 
 ### [HIGH] Escrita multi-passo sem transação
 File: AppManager.js:50-63
@@ -155,3 +158,41 @@ Total: 21 findings
 
 Phase 2 complete. Proceed with refactoring (Phase 3)? [y/n]
 > y   (autorizado via aprovação do plano e da abordagem de segurança)
+
+================================
+ADENDO — 2026-09-02 (revisão do professor)
+================================
+Achado: a Fase 3 original moveu `cc.startsWith("4") ? "PAID" : "DENIED"` de `AppManager.js`
+para `src/services/paymentGateway.js` — resolvendo a parte arquitetural do finding [HIGH]
+"Autorização de pagamento fake" (God Class → classe isolada, sem logar PAN/chave) — mas manteve
+a heurística de bandeira **idêntica**. O impacto descrito no próprio finding ("lógica de
+pagamento fictícia") continuava de pé: qualquer cartão iniciado em "4" era aprovado, mesmo sem
+ser um número de cartão válido.
+
+Causa raiz na skill: o catálogo (`02-antipattern-catalog.md`, H5) agrupava "token de auth
+forjável" e "autorização por prefixo de cartão" sob o mesmo sinal, apontando para o mesmo fix
+(guard de sessão) — mas validar *quem é o usuário* (P13) e validar *se uma operação de negócio
+é legítima* (pagamento) são problemas diferentes; reorganizar o código sem trocar a lógica não
+fecha nenhum dos dois.
+
+Correção na skill: novo anti-pattern **H6 — Fake Business/Domain Verification**, separado de
+H5, cobrindo decisões de negócio (pagamento, crédito, elegibilidade) decididas por heurística
+sem relação real com a verificação devida. Novo Playbook **P14**: verificação estrutural real
+(checksum de Luhn) + lista determinística e pequena de casos de teste conhecidos para os
+caminhos de erro — mesma convenção usada por gateways reais em modo sandbox (Stripe etc.). A
+Fase 3 do `SKILL.md` foi reforçada: mover uma verificação fake para uma classe/service sem
+trocar a lógica não fecha o finding.
+
+Correção no código: `src/services/paymentGateway.js` agora valida o número do cartão pelo
+checksum de Luhn (rejeita qualquer entrada estruturalmente inválida, não só "o que não começa
+com 4") e usa uma lista fixa de cartões de teste (`4000000000000002`, `4000000000009995`) para
+simular recusas do emissor — mesma convenção de sandbox de gateways reais. `api.http` atualizado
+com números de teste realmente válidos (Luhn) para os exemplos de sucesso/recusa.
+
+Validação (requisições reais, servidor no ar): cartão "bandeira Visa" mas Luhn-inválido
+(`4000000000000001`) → **400, recusado** (antes seria sempre aprovado só pelo prefixo); cartão
+de teste na denylist (`4000000000000002`, Luhn-válido) → **400, recusado**; cartão de teste
+válido (`4242424242424242`) → **200, aprovado**; cartão "bandeira Mastercard" mas Luhn-válido
+(`5555555555554444`) → **200, aprovado** (antes seria sempre recusado só pelo prefixo — prova de
+que a decisão não depende mais da bandeira). Regressão nos demais endpoints (checkout normal,
+`/admin/financial-report` com/sem token, `DELETE /users/:id` sem token) sem mudanças: 4/4 OK.

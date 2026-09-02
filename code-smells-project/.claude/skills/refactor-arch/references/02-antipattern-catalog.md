@@ -58,16 +58,32 @@ ao cliente, ambiente marcado como produção com debug ligado.
 **Por que:** o console interativo do Werkzeug/afins permite execução remota de código (RCE).
 **Fix:** playbook P1 (config por env; debug nunca hardcoded).
 
-### C7. Broken Access Control (endpoint sem auth)
-**Sinais:** dois casos — (a) endpoints de admin/manutenção sem autenticação: reset de banco,
+### C7. Broken Access Control (endpoint sem auth / sem checagem de dono)
+**Sinais:** três casos — (a) endpoints de admin/manutenção sem autenticação: reset de banco,
 execução de SQL arbitrário, relatórios financeiros amplos, delete de qualquer recurso por id
-sem verificação; (b) caso mais comum: **nenhuma rota de recurso do usuário logado** (tasks,
-perfil, categorias, relatórios pessoais) exige sessão/token válido — login existe e emite
-token, mas nada o valida.
-**Por que:** qualquer um executa ações destrutivas ou lê/altera dados restritos, inclusive de
-outros usuários, sem se autenticar.
-**Fix:** caso (a) → playbook P12 (admin guard). Caso (b), o mais frequente → playbook P13
-(login guard aplicado a todas as rotas de usuário autenticado). Os dois podem coexistir.
+sem verificação; (b) **nenhuma rota de recurso do usuário logado** (tasks, perfil, categorias,
+relatórios pessoais) exige sessão/token válido — login existe e emite token, mas nada o valida;
+(c) **IDOR** — a rota exige sessão, mas nenhuma camada verifica se o recurso pertence a quem
+pediu, de modo que "estar logado" equivale a acesso total.
+
+Sinais concretos do caso (c), todos detectáveis por grep:
+- o middleware **grava** o usuário atual em contexto (`g.current_user_id`, `req.user`,
+  `res.locals.user`) e **nenhum** service/controller **lê** esse valor (grep pelo nome do
+  atributo retorna apenas a atribuição);
+- existe um helper de papel (`is_admin()`, `isAdmin`) **definido e nunca chamado**;
+- endpoint de update de usuário aceita `role` / `is_admin` / `active` vindos do **corpo** sem
+  checar o papel de quem chama — e o cadastro público aceita `role: "admin"` (mass assignment);
+- **listagem/busca devolve registros de todos os usuários**, sem cláusula de dono (`Model.query.all()`
+  / `SELECT * FROM t` sem `WHERE user_id = <requisitante>`), o mesmo valendo para agregações/stats;
+- **troca de senha** aceita a senha nova **sem exigir a senha atual** (`current_password`).
+**Por que:** qualquer um executa ações destrutivas ou lê/altera dados restritos sem se
+autenticar — e, no caso (c), **autenticado como qualquer usuário**, lendo e alterando os dados
+de todos os outros.
+**Fix:** caso (a) → playbook P12 (admin guard). Caso (b) → playbook P13 (login guard aplicado a
+todas as rotas de usuário autenticado). Caso (c) → playbook **P15** (autorização por dono:
+`require_self_or_admin`, escopo de dono em listagens/buscas, bloqueio de reatribuição de dono e
+de campos de privilégio). Os três podem coexistir; **P13 sem P15 deixa o vazamento entre
+usuários aberto** — autenticar não é autorizar.
 
 ---
 

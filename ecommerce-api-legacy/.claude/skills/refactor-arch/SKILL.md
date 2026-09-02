@@ -35,8 +35,10 @@ relevante **no início da fase correspondente** — não tente memorizar tudo de
    respondendo após a refatoração (mesmos métodos e paths). Mudanças de segurança que
    removem dados sensíveis das respostas são permitidas e desejáveis.
 2. **Confirmação humana antes de escrever.** A Fase 3 só começa após o usuário aprovar
-   o relatório da Fase 2. **Nunca** modifique, crie ou apague arquivos do projeto antes
-   do `y`.
+   o relatório da Fase 2. **Nunca** modifique, crie ou apague arquivos de código do projeto
+   antes do `y`. A **única** escrita permitida antes do `y` é o próprio relatório de auditoria
+   em `reports/audit-<nome-do-projeto>.md` — ele é o artefato que embasa a decisão, não código
+   da aplicação.
 3. **Evidência, não opinião.** Todo finding tem `arquivo:linha`. "Código ruim" é
    proibido; "query SQL montada por concatenação em `models.py:28`" é o padrão.
 4. **Adapte-se ao contexto.** Um monólito de 4 arquivos e um projeto já parcialmente
@@ -88,7 +90,10 @@ Objetivo: produzir um relatório de auditoria acionável e **pedir confirmação
 4. Ordene os findings por severidade (CRITICAL → LOW). Garanta **no mínimo 5 findings** e
    **ao menos 1 CRITICAL ou HIGH** (se o projeto realmente não tiver, diga isso explicitamente).
 5. Renderize o relatório seguindo `references/03-audit-report-template.md` e **salve-o**
-   quando o usuário indicar o caminho (ex.: `reports/audit-project-N.md`).
+   em `reports/audit-<nome-do-projeto>.md` (criando o diretório `reports/` se não existir).
+   **Proponha esse caminho por conta própria** — não espere o usuário pedir; informe onde
+   salvou. Se o usuário indicar outro caminho, use o dele. Salvar o relatório é a única
+   escrita permitida nesta fase: nenhum arquivo de código pode ser tocado antes do `y`.
 6. **PARE.** Mostre o resumo de contagem e pergunte, literalmente:
 
 ```
@@ -120,6 +125,12 @@ Objetivo: reestruturar para MVC, eliminar os problemas e **provar que ainda func
      `admin_required` (Playbook P12) para ações administrativas/destrutivas, e
      `login_required` (Playbook P13) para **qualquer** rota que opera sobre dados do usuário
      autenticado (perfil, tasks, categorias, relatórios pessoais, etc.).
+   - **Sempre que a Fase 2 apontar acesso indevido a dados de outro usuário** (finding tipo
+     C7 caso (c) — IDOR), aplique também o Playbook P15: política explícita
+     (`require_admin` / `require_self_or_admin`), `actor` passado do controller ao service,
+     **escopo de dono em listagens, buscas e agregações**, bloqueio de reatribuição de dono e
+     recusa de `role`/`active` vindos do cliente. Autenticar não é autorizar: um guard que
+     grava o usuário atual e nunca é consultado **não fecha** o finding.
    - **Sempre que a Fase 2 apontar autenticação ausente ou token forjável/não validado**
      (finding tipo C7/H5 do catálogo), a Fase 3 não pode se limitar a assinar/gerar o token —
      é obrigatório aplicar `login_required` a **todas** as rotas do(s) blueprint(s) afetado(s)
@@ -141,6 +152,10 @@ Objetivo: reestruturar para MVC, eliminar os problemas e **provar que ainda func
    - Se algum finding de auth ausente foi corrigido, **teste também o caminho negativo**:
      requisição sem token (ou com token inválido) às rotas protegidas retorna 401, e o mesmo
      smoke test com um token válido do login continua respondendo 2xx.
+   - Se algum finding de autorização/IDOR foi corrigido, teste o caminho negativo **por dono**
+     (com dois usuários): acesso ao recurso do outro retorna 403/404, a listagem de um não
+     contém registros do outro, e tentativa de se auto-promover (`role`) retorna 403. "Sem
+     token → 401 / com token → 2xx" **não** prova ausência de IDOR.
    - Se algo quebrar, **corrija antes de finalizar**.
 5. Imprima o resumo final:
 

@@ -43,13 +43,13 @@ Impact: Senhas trivialmente quebráveis; vazamento do banco compromete contas.
 Recommendation: KDF real (`crypto.scrypt`/bcrypt/argon2) com salt por usuário. Playbook P4.
 
 ### [CRITICAL] Senha em texto puro no seed
-File: AppManager.js:18
+File: AppManager.js:12, 18
 Description: `INSERT INTO users (...) VALUES ('Leonan', ..., '123')`; coluna `pass` é TEXT plano.
 Impact: Credencial em texto puro no banco.
 Recommendation: Hashear no seed. Playbook P4.
 
 ### [CRITICAL] God Class
-File: AppManager.js:4-141
+File: AppManager.js:4-139
 Description: Uma classe faz conexão de DB, schema, seed, roteamento, controllers, regra de pagamento e relatório.
 Impact: Impossível testar/isolar; qualquer mudança afeta tudo.
 Recommendation: Quebrar em config, repositories, services, controllers, routes, middlewares. Playbook P3.
@@ -94,7 +94,7 @@ Impact: Vazamento de memória e estado compartilhado entre requisições.
 Recommendation: Eliminar globais mutáveis; escopo por requisição/serviço. Playbook P7.
 
 ### [HIGH] Lógica de negócio nos handlers, sem DI
-File: AppManager.js:28-137
+File: AppManager.js:7, 28-137
 Description: Checkout, relatório e delete inline nas rotas; DB fixado no construtor (`new sqlite3.Database`), sem injeção.
 Impact: Não testável, fortemente acoplado.
 Recommendation: Controllers finos → services → repositories injetados. Playbook P6/P7.
@@ -132,21 +132,25 @@ Recommendation: Wrapper com Promises + async/await (equivalente moderno: `node:s
 ### [LOW] Nomenclatura críptica
 File: AppManager.js:29-33
 Description: Variáveis `u, e, p, cid, cc` e chaves de request não padronizadas `usr, eml, pwd, c_id, card`.
+Impact: O handler de checkout só é legível relendo a desestruturação — `e` (email) e `p` (senha) são indistinguíveis à leitura, e trocá-los em uma chamada não gera erro de sintaxe, apenas grava dado errado.
 Recommendation: Nomes descritivos (preservando o contrato externo dos campos).
 
 ### [LOW] Mistura de `this` e `self`
 File: AppManager.js:26, 54, 57
 Description: `const self = this` e uso misturado de `this.db`/`self.db` por causa de arrow vs function.
+Impact: Converter um callback de `function` para arrow (ou o inverso) muda silenciosamente a quem `this` se refere; o erro só aparece em runtime, como `this.db is undefined`, e apenas na rota afetada.
 Recommendation: Padronizar com async/await (elimina o problema).
 
 ### [LOW] Código morto / exports enganosos
 File: utils.js:2-5, 10, 25; AppManager.js:2
 Description: `totalRevenue` exportado mas nunca atualizado/usado; `dbUser/dbPass/smtpUser` nunca referenciados (config morta que ainda vaza segredos).
+Impact: `totalRevenue` é um número que aparenta ser receita acumulada e vale sempre 0 — quem importá-lo produz relatório errado sem nenhum erro; e `dbPass`/`smtpUser` mantêm segredos versionados que não sustentam nem uma funcionalidade.
 Recommendation: Remover.
 
 ### [LOW] Magic numbers e loop inútil
 File: utils.js:6, 19, 22
 Description: `port: 3000` fixo; loop de 10000 iterações cujo resultado é descartado exceto 10 chars.
+Impact: A porta fixa impede subir duas instâncias ou respeitar o `PORT` do ambiente de deploy; o loop queima CPU a cada hash de senha sem adicionar nenhuma segurança (o resultado é truncado em 10 chars de base64).
 Recommendation: Config por env; remover loop inútil ao trocar o hashing.
 
 ================================
@@ -196,3 +200,52 @@ válido (`4242424242424242`) → **200, aprovado**; cartão "bandeira Mastercard
 (`5555555555554444`) → **200, aprovado** (antes seria sempre recusado só pelo prefixo — prova de
 que a decisão não depende mais da bandeira). Regressão nos demais endpoints (checkout normal,
 `/admin/financial-report` com/sem token, `DELETE /users/:id` sem token) sem mudanças: 4/4 OK.
+
+================================
+ADENDO — 2026-09-02 (remediação de segredos/concorrência e correções deste relatório)
+================================
+Correções neste relatório, sem alterar nenhum finding de mérito: a contagem já estava correta
+(`CRITICAL: 6 | HIGH: 6 | MEDIUM: 5 | LOW: 4` = `Total: 21 findings`, conferido contra os
+cabeçalhos `### [SEV]` reais). Referências reconciliadas com a linha-base: God Class
+`AppManager.js:4-141` → `4-139` (a classe fecha em 139; 141 é o `module.exports`); "Lógica de
+negócio nos handlers, sem DI" `28-137` → `7, 28-137` (o `new sqlite3.Database(':memory:')`
+citado na descrição está na linha 7, no construtor); "Senha em texto puro no seed" `18` →
+`12, 18` (a afirmação de que a coluna `pass` é TEXT plano vem do `CREATE TABLE users` na linha
+12). Adicionado o campo obrigatório `Impact:` aos 4 findings LOW, que estavam sem ele.
+
+Remediação aplicada no código nesta rodada:
+
+- `ADMIN_TOKEN` e `PAYMENT_GATEWAY_KEY` não têm mais fallback hardcoded — o antigo default
+  `dev-admin-token-change-me` era o mesmo token publicado no `api.http`. A aplicação agora sai
+  com código 1 e mensagem clara se as variáveis não vierem do ambiente. O comentário que
+  afirmava "nenhum segredo hardcoded no código" foi corrigido e o `api.http` passou a usar
+  `{{$processEnv ADMIN_TOKEN}}`. **O token antigo deve ser considerado comprometido** —
+  verificado que ele agora recebe 401.
+- `transaction()` passou a serializar o trabalho numa fila de promessas sobre a conexão sqlite3
+  única, e o `BEGIN` foi movido para dentro do `try` (antes uma falha no próprio `BEGIN` não
+  disparava `ROLLBACK`). Verificado: 10 checkouts concorrentes retornaram 10× HTTP 200, contra
+  9× HTTP 500 (`SQLITE_ERROR: cannot start a transaction within a transaction`) antes da
+  correção. Integridade pós-teste conferida pelo relatório financeiro: 12 alunos, 12 pagamentos,
+  nenhuma matrícula sem pagamento.
+- Compensação de cobrança implementada: se a persistência falhar depois de a cobrança já ter
+  sido aprovada, o valor é estornado no gateway (`refund(transactionId, amount)`) e o fato é
+  logado, incluindo log crítico de conciliação manual caso o próprio estorno falhe. Verificado
+  forçando falha de persistência: o cliente recebeu 500 genérico, o log registrou o estorno
+  bem-sucedido e o usuário criado dentro da transação não persistiu.
+- O error handler deixou de devolver `err.message` cru em status >= 500: responde
+  `{"erro":"Erro interno no servidor"}` e loga método, URL e erro completo no servidor.
+  Verificado que o texto `SQLITE_ERROR` aparece apenas no log.
+- Adicionado 404 em JSON para rota desconhecida (antes retornava o HTML default do Express).
+- `DELETE /api/users/:id` com id inexistente passou de 200 `{"deleted":false}` para 404
+  `{"erro":"Usuário não encontrado"}`.
+- `card` no checkout passou a aceitar número JSON além de string, e o comprimento de PAN foi
+  restringido a 13-19 dígitos (antes 12 dígitos era aceito).
+
+MUDANÇAS DE CONTRATO (registro explícito): (1) delete de id inexistente 200 → 404; (2) o corpo
+dos erros 5xx passa a ser genérico; (3) rota desconhecida passa a devolver JSON; (4)
+`ADMIN_TOKEN` e `PAYMENT_GATEWAY_KEY` tornam-se obrigatórios na inicialização; (5) PAN de 12
+dígitos passa a ser recusado.
+
+Permanecem em aberto, fora do escopo desta rodada: helmet/rate-limiting, idempotência do
+checkout, verificação de posse do e-mail no checkout, `crypto.timingSafeEqual` na comparação do
+token de admin, e vulnerabilidades transitivas do `npm audit` em dependências do `sqlite3`.

@@ -52,8 +52,10 @@ Total: <N> findings
   registre isso explicitamente em vez de inflar a severidade.
 - **Sem ruído:** cada finding deve ser acionável. Evite findings genéricos ("código
   desorganizado"); aponte o quê, onde e como corrigir.
-- **Persistência:** quando o usuário indicar o caminho (ex.: `reports/audit-project-N.md`),
-  salve o relatório nesse arquivo, mantendo o mesmo formato.
+- **Persistência:** salve o relatório em `reports/audit-<nome-do-projeto>.md` por padrão
+  (crie o diretório `reports/` se necessário), mantendo exatamente este formato, e informe o
+  caminho ao usuário. **Proponha esse caminho sem esperar que o usuário peça**; se ele indicar
+  outro, use o dele. O arquivo do relatório é a única escrita permitida na Fase 2.
 
 ## Encerramento da fase (obrigatório)
 
@@ -63,4 +65,5 @@ Depois de exibir o relatório, **pare** e pergunte literalmente:
 Phase 2 complete. Proceed with refactoring (Phase 3)? [y/n]
 ```
 
-Não modifique nenhum arquivo do projeto antes da resposta `y`.
+Não modifique nenhum arquivo **de código** do projeto antes da resposta `y` — apenas o
+arquivo do relatório em `reports/` pode ser escrito nesta fase.

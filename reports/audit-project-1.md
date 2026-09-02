@@ -21,7 +21,7 @@ Stack:   Python + Flask
 Files:   4 analyzed | ~780 lines of code
 
 ## Summary
-CRITICAL: 8 | HIGH: 5 | MEDIUM: 7 | LOW: 3
+CRITICAL: 8 | HIGH: 6 | MEDIUM: 8 | LOW: 3
 
 ## Findings
 
@@ -62,7 +62,7 @@ Impact: Dump das senhas de todos os usuários para qualquer chamador.
 Recommendation: Serialização que omite campos sensíveis (selecionar colunas explícitas). Playbook P5.
 
 ### [CRITICAL] SECRET_KEY hardcoded e vazado via /health
-File: app.py:7; controllers.py:289
+File: app.py:7; controllers.py:285-289
 Description: `SECRET_KEY = "minha-chave-super-secreta-123"` no código e devolvido pelo `/health` (`"secret_key": ...`), junto de `debug`, `db_path` e `ambiente: "producao"`.
 Impact: Segredo versionado e exposto publicamente sem auth.
 Recommendation: Config por variável de ambiente; remover o segredo do payload do /health. Playbook P1 + P5.
@@ -117,8 +117,8 @@ Recommendation: Substituir por um único JOIN e agrupar em memória. Playbook P9
 
 ### [MEDIUM] Validação de entrada ausente/fraca
 File: controllers.py:39-46, 118, 146-165, 239-240; models.py:140
-Description: Sem checagem de tipo de `preco`/`estoque`; `if preco_min:` descarta `0` (falsy); criar_usuario não valida formato de email; criar_pedido quebra com item sem `produto_id`.
-Impact: 500s e dados inválidos.
+Description: Sem checagem de tipo de `preco`/`estoque`; `if preco_min:` descarta `0` (falsy); criar_usuario não valida formato de email; criar_pedido quebra com item sem `produto_id`; `atualizar_status_pedido` não checa body nulo — chama `request.get_json()` e em seguida `dados.get("status", "")`, então requisição sem corpo (ou com corpo não-JSON) levanta AttributeError.
+Impact: 500s e dados inválidos — inclusive um 500 por AttributeError em `PUT /pedidos/<id>/status` sem corpo, onde o correto seria 400.
 Recommendation: Validação centralizada/reutilizável e checagem de tipos. Playbook P10.
 
 ### [MEDIUM] Vazamento de exceção interna ao cliente
@@ -152,28 +152,31 @@ Impact: Não escala; payloads potencialmente enormes.
 Recommendation: Parâmetros limit/offset no repository.
 
 ### [MEDIUM] API deprecated: persistência por SQL cru montado à mão
-File: models.py (todas as funções)
-Description: Uso de `sqlite3` com SQL concatenado em vez de queries parametrizadas (que o próprio projeto usa corretamente em database.py:70-73).
+File: models.py:28, 47-50, 57-61, 68, 92, 109-111, 126-129, 140, 148-151, 155-166, 174, 188, 192, 220, 224, 279-281, 289-297
+Description: A camada de dados inteira usa `sqlite3` com SQL cru escrito à mão, em vez de queries parametrizadas (que o próprio projeto usa corretamente em database.py:70-73). Nas linhas citadas o SQL é montado por **concatenação de input**; as demais funções usam SQL cru mas **estático**, sem input (`get_todos_produtos` l.7, `get_todos_usuarios` l.75, `get_todos_pedidos` l.206, `relatorio_vendas` l.239-254) — SQL cru é o padrão de toda a camada, concatenação de input é o subconjunto listado acima.
 Impact: Inseguro e antiquado.
 Recommendation: Queries parametrizadas (ou ORM). Equivalente moderno: `cursor.execute(sql, params)`. Playbook P2/P11.
 
 ### [LOW] Magic numbers e literais soltos
 File: models.py:257-262; controllers.py:47-50, 52, 242; app.py:36
 Description: Faixas/taxas de desconto, limites de nome, listas de categoria/status e versão duplicada hardcoded.
+Impact: Mudar uma faixa de desconto ou aceitar um novo status/categoria obriga a caçar literais em 3 arquivos; a versão `"1.0.0"` já está duplicada em `app.py:36` e `controllers.py:285`, então uma atualização parcial faz `/` e `/health` reportarem versões diferentes.
 Recommendation: Constantes nomeadas / config. Playbook L1.
 
 ### [LOW] Sombreamento do builtin `id`
 File: controllers.py:14, 64, 98, 136; models.py:24, 54, 65, 89
 Description: Parâmetro chamado `id` em várias funções.
+Impact: O builtin `id()` fica inacessível dentro dessas funções e o nome não diz de que entidade é o identificador — em chamadas posicionais entre camadas (controller → model) nada impede passar um `usuario_id` onde se espera `produto_id`.
 Recommendation: Renomear (ex.: `produto_id`).
 
 ### [LOW] Concatenação de strings em vez de f-strings
 File: controllers.py:8; models.py:48-49
 Description: `"... " + str(x)` por todo o código (também contribui para o smell de injeção).
+Impact: Concatenação estoura `TypeError` em valores inesperados e, sobretudo, é o mecanismo exato que produz o SQL injetável dos findings CRITICAL — o estilo dissolve na sintaxe o ponto onde input do usuário entra na query.
 Recommendation: f-strings / parametrização.
 
 ================================
-Total: 23 findings
+Total: 25 findings
 ================================
 
 Phase 2 complete. Proceed with refactoring (Phase 3)? [y/n]
@@ -193,3 +196,62 @@ permanece compatível com qualquer método, então não há impacto em credencia
 Revalidado: boot limpo + `POST /login`, `GET /produtos`, `GET /usuarios`, `/admin/query` (401 sem
 token, 200 com token) e `/admin/reset-db` (401 sem token) testados via API real. Nota de
 portabilidade adicionada ao Playbook P4 da skill (sincronizada nos 3 projetos).
+
+================================
+ADENDO — 2026-09-02 (remediação de acesso/segredos e correções deste relatório)
+================================
+Correções neste relatório (contagem e referências), sem alterar nenhum finding de mérito:
+`## Summary` passou de `CRITICAL: 8 | HIGH: 5 | MEDIUM: 7 | LOW: 3` para `8 | 6 | 8 | 3` e o
+rodapé de `Total: 23 findings` para `Total: 25 findings` — a contagem real dos cabeçalhos
+`### [SEV]` é 25. Referências reconciliadas com a linha-base: `controllers.py:289` →
+`controllers.py:285-289` no finding do SECRET_KEY (o `debug`, o `db_path` e o
+`ambiente: "producao"` citados estão em 286-288); a referência solta `controllers.py:239-240`
+no finding de validação ganhou contrapartida na descrição (body nulo em
+`atualizar_status_pedido`); e o finding de SQL cru trocou `models.py (todas as funções)` por
+linhas concretas, distinguindo "SQL cru em toda a camada" de "concatenação de input" — as
+listagens sem filtro (`models.py:7, 75, 206, 239-254`) usam SQL cru mas estático. Adicionado o
+campo obrigatório `Impact:` aos 3 findings LOW, que estavam sem ele.
+
+Remediação aplicada no código (Fase 3, rodada de Broken Access Control):
+
+- `SECRET_KEY` e `ADMIN_TOKEN` não têm mais default versionado: a aplicação falha na
+  inicialização com mensagem explícita se as variáveis não vierem do ambiente
+  (`FLASK_ENV=development` gera valor aleatório efêmero em memória). Verificado: sem as
+  variáveis o processo aborta; com elas sobe normalmente.
+- `POST /login` passa a emitir token de sessão assinado (`itsdangerous`,
+  `URLSafeTimedSerializer`), devolvido em `dados.token`. A emissão vive em
+  `src/services/auth_token_service.py` e o middleware consome o service. Antes não existia
+  mecanismo de sessão algum — nenhuma rota podia ser protegida.
+- Política de autorização aplicada aos 19 endpoints, **sem alterar nenhum path ou método**:
+  públicos `GET /`, `GET /health`, `POST /login`, `POST /usuarios` e o catálogo de leitura
+  (`GET /produtos`, `/produtos/busca`, `/produtos/<id>`); autenticado `POST /pedidos`,
+  `GET /pedidos/usuario/<id>` e `GET /usuarios/<id>` (dono ou admin); somente admin a escrita de
+  produtos, `GET /usuarios`, `GET /pedidos`, `PUT /pedidos/<id>/status` e
+  `GET /relatorios/vendas`. As rotas `/admin/*` exigem agora as **duas** coisas: header
+  `X-Admin-Token` e sessão de usuário admin.
+- `POST /admin/query` deixou de executar SQL arbitrário: aceita uma única instrução `SELECT`
+  sobre a allowlist `produtos, usuarios, pedidos, itens_pedido`, recusando múltiplas instruções,
+  comentários SQL, palavras-chave de escrita/DDL, `PRAGMA` e `ATTACH`; a coluna `senha` nunca é
+  retornada; um authorizer somente-leitura do SQLite atua como segunda camada. Verificado com 9
+  payloads recusados (HTTP 400 — incluindo `UPDATE produtos SET preco = 0`,
+  `DROP TABLE usuarios`, `PRAGMA database_list`, `SELECT senha FROM usuarios`,
+  `SELECT * FROM sqlite_master`, instrução dupla e comentário) e 4 aceitos (HTTP 200, incluindo
+  um JOIN entre `pedidos` e `usuarios`). Em `SELECT * FROM usuarios` a resposta veio sem
+  nenhuma ocorrência da chave `senha`.
+- `POST /pedidos` passou a forçar o `usuario_id` ao do token, ignorando o valor enviado pelo
+  cliente. Verificado: cliente de id 2 enviando `usuario_id: 3` gerou pedido persistido com
+  `usuario_id = 2`.
+- Coluna `email` da tabela `usuarios` ganhou `UNIQUE` e o cadastro duplicado passou a responder
+  409 (antes 201, com o login resolvendo de forma ambígua para o primeiro registro).
+- Os controllers `admin_controller` e `system_controller` deixaram de executar SQL direto:
+  foram criados `AdminService`/`AdminRepository` e `SystemService`/`SystemRepository`,
+  eliminando o smell "controller que fala SQL" em vez de apenas movê-lo de arquivo.
+
+MUDANÇA DE CONTRATO (registro explícito): endpoints que antes respondiam 200 sem credencial
+nenhuma agora respondem 401 (sem token) ou 403 (token de usuário comum em rota de admin). Isto
+é a correção pretendida dos findings de Broken Access Control, **não** uma regressão. Matriz
+verificada nos 19 endpoints, com 0 respostas 5xx e 0 tracebacks no log.
+
+Permanecem em aberto, fora do escopo desta rodada: paginação nas listagens, CORS efetivo `*`
+por default, `print()` no boot, `hmac.compare_digest` na comparação do token de admin, e as
+credenciais de exemplo do seed (`admin@loja.com`/`admin123`).

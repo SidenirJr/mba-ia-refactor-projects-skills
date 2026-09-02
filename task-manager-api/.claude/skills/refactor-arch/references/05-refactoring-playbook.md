@@ -4,7 +4,7 @@ Padrões de transformação **antes/depois** para os anti-patterns do catálogo.
 mapeia para um ou mais findings. Aplique por ordem de severidade. Os exemplos cobrem
 Python/Flask e Node/Express para reforçar o agnosticismo.
 
-> ≥8 padrões exigidos; abaixo há 14 (P1–P14).
+> ≥8 padrões exigidos; abaixo há 15 (P1–P15).
 
 ---
 
@@ -260,8 +260,44 @@ ou `func.count()` agregado em vez de N `count()` separados.
 
 Resolve: M2 (validação), M4 (middleware/erro).
 
-**Antes:** validação manual repetida e `except Exception: return 500` em cada handler,
-vazando `str(e)`.
+**Antes (validação ad-hoc repetida + `except` nu vazando detalhe interno)**
+```python
+@bp.route("/categorias/<int:cat_id>", methods=["PUT"])
+def update_category(cat_id):
+    cat = Category.query.get(cat_id)
+    if not cat:
+        return jsonify({"error": "Categoria não encontrada"}), 404
+
+    data = request.get_json()        # body ausente/inválido -> data = None
+    if "name" in data:               # TypeError: argument of type 'NoneType' -> 500 opaco
+        cat.name = data["name"]
+    if "color" in data:
+        cat.color = data["color"]
+
+    try:
+        db.session.commit()
+        return jsonify(cat.to_dict()), 200
+    except:                          # except nu: mascara a causa, captura até KeyboardInterrupt
+        db.session.rollback()
+        return jsonify({"error": "Erro ao atualizar"}), 500
+
+
+@bp.route("/usuarios", methods=["POST"])
+def create_user():
+    data = request.get_json()
+    if not data:                 return jsonify({"error": "Dados inválidos"}), 400
+    if not data.get("name"):     return jsonify({"error": "Nome é obrigatório"}), 400
+    if not data.get("email"):    return jsonify({"error": "Email é obrigatório"}), 400
+    if not data.get("password"): return jsonify({"error": "Senha é obrigatória"}), 400
+    if not re.match(EMAIL_RE, data["email"]):
+        return jsonify({"error": "Email inválido"}), 400   # bloco copiado em create/update
+    try:
+        db.session.add(user); db.session.commit()
+        return jsonify(user.to_dict()), 201
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500   # vaza SQL/driver ao cliente
+```
 **Depois**
 ```python
 # middlewares/error_handler.py
@@ -271,9 +307,15 @@ def register_error_handlers(app):
     @app.errorhandler(Exception)
     def _e(e): app.logger.exception(e); return jsonify({"erro": "Erro interno"}), 500
 ```
-Centralize a validação em schemas (marshmallow/pydantic) ou helpers reutilizáveis; pare de
-vazar stack/erro do driver ao cliente. **Node:** middleware `(err, req, res, next)` único no
-fim da cadeia.
+```python
+# controllers/*.py — body opcional nunca estoura; quem decide o que é válido é o service/schema
+def update_category(cat_id):
+    return jsonify(service.update(cat_id, request.get_json(silent=True) or {})), 200
+```
+Centralize a validação em schemas (marshmallow/pydantic) ou helpers reutilizáveis; troque
+`except:` nu por exceções de domínio (`ValidationError`, `NotFoundError`) tratadas pelo handler
+central, e pare de vazar stack/erro do driver ao cliente. **Node:** middleware
+`(err, req, res, next)` único no fim da cadeia.
 
 ---
 
@@ -281,17 +323,25 @@ fim da cadeia.
 
 Resolve: M6 (logging) + seção de deprecated do catálogo.
 
+**Antes**
 ```python
-# deprecated → moderno
-Task.query.get(id)          →  db.session.get(Task, id)
-datetime.utcnow()           →  datetime.now(datetime.UTC)
-print("Task criada", id)    →  logger.info("Task criada id=%s", id)
+Task.query.get(id)                       # Query API legada (SQLAlchemy 2.x)
+datetime.utcnow()                        # naive; deprecated no Python 3.12+
+print("Task criada", id)                 # sem nível, sem estrutura, sem destino
 ```
 ```js
-// Express
-const bodyParser = require("body-parser"); app.use(bodyParser.json());  // antigo
-app.use(express.json());                                                // moderno
-// callbacks → async/await + Promise.all
+const bodyParser = require("body-parser"); app.use(bodyParser.json());  // Express < 4.16
+db.all(sql, [], function (err, rows) { /* pirâmide de callbacks */ });
+```
+**Depois**
+```python
+db.session.get(Task, id)
+datetime.now(datetime.UTC)               # timezone-aware
+logger.info("Task criada id=%s", id)
+```
+```js
+app.use(express.json());
+const rows = await allAsync(sql);        // async/await + Promise.all
 ```
 Use o `logging` do Python / um logger (pino/winston) no Node, com níveis.
 
@@ -396,6 +446,11 @@ apenas `POST /login` e o cadastro (`POST /users` ou equivalente). `login_require
 `admin_required` **não são mutuamente exclusivos**: uma rota administrativa pode compor os
 dois (`admin_required(login_required(handler))`) quando o projeto tiver papéis/roles.
 
+> **P13 não encerra C7 sozinho.** O guard responde *quem é* o requisitante e grava esse
+> usuário no contexto (`g.current_user_id`, `req.user`). Se nenhuma camada consultar esse
+> valor, qualquer usuário logado continua alcançando o recurso de qualquer outro. Siga
+> obrigatoriamente com **P15** (autorização por dono).
+
 ---
 
 ## P14 — Substituir verificação de negócio fake por checagem real (sandbox)
@@ -462,3 +517,222 @@ essa regra — não um atalho que aprova com base em um padrão previsível e ad
 usuário. Quando não há como validar contra um provedor real (sandbox/exercício), documente e
 use uma lista fixa e pequena de casos de teste conhecidos para os caminhos de erro, como fazem
 gateways de pagamento reais em ambiente de teste.
+
+---
+
+## P15 — Autorização por dono (fim do IDOR)
+
+Resolve: C7 (broken access control), caso **(c)** — o mais comum: o requisitante *está*
+autenticado, mas nada verifica se o recurso pedido é dele. **Autenticar** responde *quem é*
+(P13); **autorizar** responde *o que essa pessoa pode alcançar* (P15). Um guard que captura o
+usuário atual no contexto e nunca é consultado por nenhuma camada **não é proteção** — ele
+transforma "estar logado" em acesso total. Aplique P15 sempre depois de P13.
+
+**Quando aplicar:** o guard de sessão existe (ou acabou de ser introduzido por P13) e mesmo
+assim `GET /<recurso>/<id>` de outro dono responde 200; `GET /<recurso>` devolve os registros
+de todo mundo; `PUT /users/<id>` aceita `role` do corpo; o cadastro público aceita
+`role: "admin"`; a troca de senha não exige a senha atual. Sinais de grep: o middleware grava
+`g.current_user_id` / `req.user` e nenhum service ou controller lê esse valor; existe um
+helper de papel (`is_admin()`) definido e nunca chamado.
+
+**Antes (Python — autenticado é tratado como autorizado)**
+```python
+# middlewares/auth.py — o guard grava o usuário atual... e ninguém consulta o valor
+def login_required(f):
+    @wraps(f)
+    def wrapper(*a, **k):
+        g.current_user_id = _read_token()     # gravado e nunca lido
+        return f(*a, **k)
+    return wrapper
+
+# services/task_service.py — o service enxerga o mundo inteiro
+class TaskService:
+    def list_all(self):                        # devolve as tasks de TODOS os usuários
+        return [t.to_dict() for t in db.session.execute(db.select(Task)).scalars()]
+
+    def get(self, task_id):
+        task = db.session.get(Task, task_id)   # sem checar dono -> IDOR por id
+        if not task:
+            raise NotFoundError("Task não encontrada")
+        return task.to_dict()
+
+    def update(self, task_id, data):
+        task = db.session.get(Task, task_id)
+        if "user_id" in data:
+            task.user_id = data["user_id"]     # qualquer um reatribui o dono
+        ...
+
+# services/user_service.py
+class UserService:
+    def create(self, data):
+        return User(role=data.get("role", "user"))   # mass assignment: anônimo vira admin
+
+    def update(self, user_id, data):
+        if "password" in data:
+            user.set_password(data["password"])      # troca senha sem exigir a atual
+        if "role" in data:
+            user.role = data["role"]                 # escala privilégio sem checar papel
+```
+
+**Depois — 1. módulo de política, puro e testável (sem `flask`/`req`)**
+```python
+# services/authorization.py
+from errors import ForbiddenError
+
+def is_admin(actor):
+    return bool(actor is not None and actor.is_admin())
+
+def require_admin(actor, message="Requer privilégio de administrador"):
+    if not is_admin(actor):
+        raise ForbiddenError(message)
+
+def require_self_or_admin(actor, owner_id, message="Acesso negado a recurso de outro usuário"):
+    if actor is None:
+        raise ForbiddenError("Requisição sem usuário autenticado")
+    if actor.is_admin() or actor.id == owner_id:
+        return
+    raise ForbiddenError(message)
+```
+
+**2. o guard expõe o usuário; o *controller* o repassa como `actor`**
+```python
+# middlewares/auth.py
+def current_user():
+    return getattr(g, "current_user", None)
+
+# controllers/task_controller.py — controller continua fino, mas é ele que injeta o actor
+def get_task(task_id):
+    return jsonify(service.get(task_id, current_user())), 200
+```
+> O service **não** lê `flask.g` / `req.user`: recebe `actor` por parâmetro. Assim a camada de
+> negócio segue testável sem request (`service.get(1, actor=usuario_falso)`) e a política de
+> acesso fica explícita na assinatura, não escondida num global de transporte.
+
+**3. escopo de dono em TODA leitura — listagem, busca e agregações incluídas**
+```python
+class TaskService:
+    def _visible(self, stmt, actor):
+        """Restringe a consulta ao que o requisitante pode ver."""
+        if is_admin(actor):
+            return stmt
+        if actor is None:
+            raise NotFoundError("Task não encontrada")
+        return stmt.where(Task.user_id == actor.id)
+
+    def _require_visible(self, task_id, actor):
+        task = db.session.get(Task, task_id)
+        if not task:
+            raise NotFoundError("Task não encontrada")
+        require_self_or_admin(actor, task.user_id, "Acesso negado a task de outro usuário")
+        return task
+
+    def list_all(self, actor):
+        stmt = self._visible(db.select(Task), actor)
+        return [t.to_dict() for t in db.session.execute(stmt).scalars()]
+
+    def get(self, task_id, actor):
+        return self._require_visible(task_id, actor).to_dict()
+
+    def search(self, actor, query=None, user_id=None):
+        stmt = self._visible(db.select(Task), actor)
+        if user_id:                                  # filtrar pelo dono de outra pessoa
+            require_self_or_admin(actor, int(user_id))
+            stmt = stmt.where(Task.user_id == int(user_id))
+        ...
+
+    def stats(self, actor):                          # agregação também é leitura
+        base = self._visible(db.select(func.count()).select_from(Task), actor)
+        return {"total": db.session.scalar(base) or 0}
+```
+> Proteger só o acesso por id **não fecha o vazamento**: `GET /tasks` devolvendo tudo, uma
+> busca sem cláusula de dono ou um `/stats` global expõem exatamente os mesmos dados.
+
+**4. dono na escrita: quem cria é dono; reatribuir é ação de admin**
+```python
+    def _resolve_owner(self, data, actor):
+        """Dono do recurso novo: o próprio requisitante, exceto se um admin indicar outro."""
+        if "user_id" in data and data["user_id"] is not None:
+            if actor is None or data["user_id"] != actor.id:
+                require_admin(actor, "Apenas um administrador pode criar para outro usuário")
+            return data["user_id"]
+        return actor.id if actor else None
+
+    def update(self, task_id, data, actor):
+        task = self._require_visible(task_id, actor)
+        if "user_id" in data and data["user_id"] != task.user_id:
+            require_admin(actor, "Apenas um administrador pode reatribuir o dono")
+            task.user_id = data["user_id"]
+        ...
+```
+
+**5. campos de privilégio e troca de senha**
+```python
+class UserService:
+    def create(self, data):
+        # Cadastro é rota PÚBLICA: `role` vindo do cliente é IGNORADO e todo mundo nasce
+        # como 'user'. Promover alguém é ação de admin, via PUT /users/<id>.
+        role = "user"
+        ...
+
+    def list_all(self, actor):
+        require_admin(actor)          # listar e-mail de todos é dado de administração
+
+    def update(self, user_id, data, actor):
+        require_self_or_admin(actor, user_id)
+        user = self._require(user_id)
+        if "password" in data:
+            if not is_admin(actor):
+                # Sem exigir a senha atual, uma sessão vazada vira takeover permanente da conta.
+                atual = data.get("current_password")
+                if not atual or not user.check_password(atual):
+                    raise ForbiddenError("Senha atual obrigatória para alterar a senha")
+            user.set_password(data["password"])
+        if "role" in data:
+            require_admin(actor, "Apenas um administrador pode alterar o role")
+        if "active" in data:
+            require_admin(actor, "Apenas um administrador pode ativar/desativar um usuário")
+```
+
+**Node/Express — mesma política, mesma passagem de `actor`**
+```js
+// services/authorization.js — puro, sem conhecer req/res
+const isAdmin = (actor) => Boolean(actor && actor.role === "admin");
+function requireAdmin(actor) {
+  if (!isAdmin(actor)) throw new ForbiddenError("Requer privilégio de administrador");
+}
+function requireSelfOrAdmin(actor, ownerId) {
+  if (!actor) throw new ForbiddenError("Requisição sem usuário autenticado");
+  if (isAdmin(actor) || actor.id === ownerId) return;
+  throw new ForbiddenError("Acesso negado a recurso de outro usuário");
+}
+
+// routes/taskRoutes.js — o guard autentica, o controller injeta req.user como actor
+router.get("/tasks", loginRequired, (req, res, next) =>
+  taskService.listAll(req.user).then((r) => res.json(r)).catch(next));
+
+// services/taskService.js — recebe actor; nunca lê req
+async function listAll(actor) {
+  return isAdmin(actor) ? repo.findAll() : repo.findByOwner(actor.id);  // escopo na LISTAGEM
+}
+async function get(id, actor) {
+  const task = await repo.findById(id);
+  if (!task) throw new NotFoundError("Task não encontrada");
+  requireSelfOrAdmin(actor, task.userId);                              // fim do IDOR por id
+  return task;
+}
+async function update(id, data, actor) {
+  const task = await get(id, actor);
+  if ("userId" in data && data.userId !== task.userId) requireAdmin(actor);
+  return repo.update(id, data);
+}
+```
+
+**Validação obrigatória — caminho negativo por dono, não só por token.** Com dois usuários A
+e B: `GET /<recurso>/<id-de-B>` autenticado como A responde 403 (ou 404, se você optar por não
+revelar existência); `GET /<recurso>` como A não contém nenhum registro de B; `PUT /users/<id-de-A>`
+com `{"role": "admin"}` responde 403; cadastro público com `{"role": "admin"}` cria um `user`;
+`PUT /users/<id-de-A>` com `{"password": "nova"}` sem `current_password` responde 403. Um smoke
+test que só compara "sem token → 401 / com token → 2xx" **não detecta IDOR**.
+
+Ver catálogo: **C7** (Broken Access Control), caso (c). P13 fecha a autenticação, P15 fecha a
+autorização — aplicar só P13 deixa o finding aberto.
